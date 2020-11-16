@@ -11,6 +11,44 @@ Experience = namedtuple(
     "Experience", field_names=["state", "action", "reward", "done", "new_state"]
 )
 
+
+def train_batch(self):
+    """
+    Contains the logic for generating a new batch of data to be passed to the DataLoader
+    Returns:
+        yields a Experience tuple containing the state, action, reward, done and next_state.
+    """
+    episode_reward = 0
+    episode_steps = 0
+
+    while self.total_steps % self.batches_per_epoch != 0:
+        self.total_steps += 1
+        # Act
+        action = self.agent(self.state)
+        # Env step
+        next_state, r, is_done, _ = self.env.step(action[0])
+        episode_reward += r
+        episode_steps += 1
+        # Buffer update
+        self.agent.update_epsilon(self.global_step)
+        self.buffer.append(state=self.state, action=action[0], reward=r, done=is_done, new_state=next_state)
+        self.state = next_state
+
+        if is_done:
+            # self.done_episodes += 1
+            # self.total_rewards.append(episode_reward)
+            # self.total_episode_steps.append(episode_steps)
+            # self.avg_rewards = float(np.mean(self.total_rewards[-self.avg_reward_len:]))
+            self.state = self.env.reset()
+            # episode_steps = 0
+            # episode_reward = 0
+
+        # Sample train batch:
+        states, actions, rewards, dones, new_states = self.buffer.sample(self.batch_size)
+        for idx, _ in enumerate(dones):
+            yield states[idx], actions[idx], rewards[idx], dones[idx], new_states[idx]
+
+
 class ExperienceSourceDataset(torch.utils.data.IterableDataset):
     """
     Basic experience source dataset. Takes a generate_batch function that returns an iterator.
@@ -25,8 +63,92 @@ class ExperienceSourceDataset(torch.utils.data.IterableDataset):
         return iterator
 
 
+class RLDataset(torch.utils.data.IterableDataset):
+    def __init__(self, max_size, obs_sample, act_shape):
+        self.states = torch.empty([max_size] + obs_sample.shape, dtype=obs_sample.dtype)
+        self.rewards = torch.empty(max_size)
+        self.actions = torch.empty([max_size] + act_shape)
+        self.dones = torch.empty(max_size, dtype=torch.bool)
+
+        # Indexing fields:
+        self.next_idx = 0
+        self.curr_idx = 0
+        self.looped_once = False
+
+    def __len__(self):
+        """ Return number of transitions stored so far """
+        if self.looped_once:
+            return self.max_size
+        else:
+            return self.next_idx
+
+    def __getitem__(self, index):
+        """ Return a single transition """
+        # Check if the last state is being attempted to sampled - it has no next state yet:
+        if index == self.curr_idx:
+            index = self.decrement_idx(index)
+        elif index >= len(self):
+            raise ValueError("Error: index " + str(index) + " is too large for buffer of size " + str(len(self)))
+        # Check if there is a next_state, if so stack frames:
+        next_index = self.increment_idx(index)
+        is_end = self.is_episode_boundary(index)
+        # Stack states:
+        state = self.stack_last_frames_idx(index)
+        next_state = self.stack_last_frames_idx(next_index) if not is_end else None
+        return [state, self.actions[index].squeeze(), self.rewards[index].squeeze(), next_state, torch.tensor(index)]
+
+    def __iter__(self):
+        count = 0
+        while True:
+            count += 1
+            idx = self.sample_idx()
+            yield self[idx]
+            if count == self.update_freq:
+                return
+                #raise StopIteration
+
+    def add(self, state, action, reward, done, store_episodes=False):
+        # Mark episodic boundaries:
+        # if self.dones[self.next_idx]:
+        #    self.done_idcs.remove(self.next_idx)
+        # if done:
+        #    self.done_idcs.add(self.next_idx)
+
+        # Store data:
+        if self.use_list and not self.looped_once:
+            self.states.append(state)
+            self.actions.append(action)
+            self.rewards.append(reward)
+            self.dones.append(done)
+        else:
+            self.states[self.next_idx] = state
+            self.actions[self.next_idx] = action
+            self.rewards[self.next_idx] = reward
+            self.dones[self.next_idx] = done
+
+        # Take care of idcs:
+        self.curr_idx = self.next_idx
+        self.next_idx = self.increment_idx(self.next_idx)
+
+    def increment_idx(self, index):
+        """ Loop the idx from front to end. Skip expert data, as we want to keep that forever"""
+        index += 1
+        if index == self.max_size:
+            index = 0 + self.size_expert_data
+            self.looped_once = True
+        return index
+
+    def decrement_idx(self, index):
+        index -= 1
+        if index < 0:
+            index = len(self) - 1
+        return index
+
+
+
 class RLDataModule(pl.LightningDataModule):
-    def __init__(self):
+    def __init__(self, replay_size: int = 100000, expert_experiences_dataloader=None):
+
         pass
 
     def _dataloader(self) -> DataLoader:
@@ -44,6 +166,7 @@ class RLDataModule(pl.LightningDataModule):
     def test_dataloader(self) -> DataLoader:
         """Get test loader"""
         return self._dataloader()
+
 
 class MNISTDataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str = './'):
