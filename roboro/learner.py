@@ -12,44 +12,62 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
 
 from roboro.agent import Agent
-#from pl_bolts.datamodules.experience_source import ExperienceSourceDataset, Experience
-#from pl_bolts.models.rl.common.memory import MultiStepBuffer
+from roboro.env_wrappers import create_env
 
 
 class Learner(pl.LightningModule):
     """
-    PyTorch Lightning Module that contains an Agent and trains it in an env
+    PyTorch Lightning Module that contains an Agent and trains it in an train_env
     
     Example:
         >>> import gym
-        >>> from roboro.agent import Agent
         >>> from roboro.learner import Learner
         ...
-        >>> env = gym.make("CartPole-v0")
-        >>> agent = Agent(env.observation_space, env.action_space)
-        >>> learner = Learner(agent, env)
+        >>> learner = Learner(train_env="CartPole-v0")
     Train::
         trainer = Trainer()
-        trainer.fit(learner)
+        trainer.fit(learner, max_steps=10000)
     Note:
         Currently only supports CPU and single GPU training with `distributed_backend=dp`
     """
 
     def __init__(self,
-                 agent: Agent,
-                 env,
+                 train_env: str = None,
+                 train_ds: str = None,
+                 val_env: str = None,
+                 val_ds: str = None,
+                 test_env: str = None,
+                 test_ds: str = None,
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
                  warm_start_size: int = 10000,
                  avg_reward_len: int = 100,
                  seed: int = 123,
                  steps_per_epoch: int = 1000,
+                 frame_stack: int = 4,
+                 frameskip: int = 4,
+                 grayscale: int = 0,
                  **kwargs):
         super().__init__()
         self.save_hyperparameters()
-        self.agent = agent
-        self.env = env if not (type(env) == str) else gym.make(env)
-        self.state = self.env.reset()
+        # init train_env
+        assert train_env is not None or train_ds is not None, "Can't fit agent without training data!"
+        self.train_env, self.train_dl = None, None
+        if train_env is not None:
+            self.train_env, self.train_obs = create_env(train_env, frameskip, frame_stack, grayscale)
+        if train_ds is not None:
+            self.train_dl = create_dl(train_ds)
+            # TODO: make train/val/test split and use it
+        # init val loader
+        self.val_env, self.val_dl = self.train_env, self.train_dl
+        if val_env is not None:
+            self.val_env = create_env(val_env, frameskip, frame_stack, grayscale)
+        if val_ds is not None:
+            self.val_dl = create_dl(val_ds)
+        elif self.train_dl is not None:
+            self.val_dl = self.train_dl
+        # init agent
+        self.agent = Agent(self.train_env.sample(), self.train_env.action_space)
 
         # init counters
         self.total_steps = 0
@@ -94,34 +112,39 @@ class Learner(pl.LightningModule):
         # update buffer
         self.agent.update_buffer(extra_info)
 
-        if self.trainer.use_dp or self.trainer.use_ddp2:
-            loss = loss.unsqueeze(0)
-
         self.log('steps', self.total_steps, on_step=True, on_epoch=True, prog_bar=True, logger=False)
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
     def val_step(self, *args, **kwargs):
-        """Evaluate the agent for 10 episodes"""
-        test_reward = self.run(self.test_env, n_eps=5, epsilon=0)
-        avg_reward = sum(test_reward) / len(test_reward)
-        self.log('test_reward', avg_reward, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        """Evaluate the agent for n episodes"""
+        n = 5
+        test_reward_lists = self.run(self.test_env, n_eps=n, epsilon=0)
+        assert n == len(test_reward_lists)
+        avg_return = sum(test_reward_lists) / n
+        self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def configure_optimizers(self) -> List[Optimizer]:
         """ Initialize Adam optimizer"""
         optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         return [optimizer]
 
+    def step(self, obs, store=False):
+        obs = obs.to(self.device, self.dtype)
+        action = self(obs).squeeze(0)
+        next_state, r, is_done, _ = self.train_env.step(action)
+        # add to buffer
+        if store:
+            self.buffer.append(state=self.train_obs, action=action, reward=r, done=is_done, new_state=next_state)
+        return next_state, action, r, is_done
+
     def on_batch_start(self):
-        """ Determines how many steps to do in the env"""
+        """ Determines how many steps to do in the train_env and runs them"""
         for _ in range(self.steps_per_train):
-            action = self.agent(self.state).squeeze(0)
-            next_state, r, is_done, _ = self.env.step(action)
-            # add to buffer
-            self.buffer.append(state=self.state, action=action, reward=r, done=is_done, new_state=next_state)
-            self.state = next_state
+            next_state, action, r, is_done = self.step(self.train_obs, store=True)
+            self.train_obs = next_state
             if is_done:
-                self.state = self.env.reset()
+                self.train_obs = self.train_env.reset()
                 self.episode_counter += 1
             self.total_steps += 1
             if self.total_steps % self.steps_per_epoch:
@@ -151,15 +174,13 @@ class Learner(pl.LightningModule):
             episode_reward = 0
 
             while not done:
+                next_state, action, r, is_done = self.step(episode_state, store=store)
 
-                action = self.agent(episode_state, self.device).squeeze(0)
-                next_state, reward, done, _ = self.env.step(action)
                 episode_state = next_state
-                episode_reward += reward
-                if store:
-                    self.buffer.append(episode_state, action, reward, done, next_state)
+                episode_reward += r
                 steps += 1
             total_rewards.append(episode_reward)
+            eps += 1
 
         self.agent.epsilon = eps
 
@@ -167,7 +188,7 @@ class Learner(pl.LightningModule):
 
     def on_train_start(self):
         if self.warm_start > 0:
-            self.run(n_steps=self.warm_start, env=self.env, store=True, epsilon=1.0)
+            self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
 
     def get_progress_bar_dict(self):
         """

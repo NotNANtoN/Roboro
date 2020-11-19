@@ -32,15 +32,17 @@ parser = Agent.add_model_specific_args(parser)
 parser = Learner.add_model_specific_args(parser)
 # Parse
 args = parser.parse_args()
-# Create env
-env_str = args.env
+# Create train_env
+env_str = args.train_env
 env = gym.make(env_str)
 env_data_module = RLDataModule(env)
 # Create agent and learner
 if args.path is not None:
+    # load from checkpoint
     learner = Learner.load_from_checkpoint(args.path)
     agent = learner.agent
 else:
+    # create from scratch
     agent = Agent(env.observation_space, env.action_space)
     learner = Learner(agent, env)
     # Test agent before training:

@@ -24,22 +24,25 @@ class Agent(torch.nn.Module):
         else:
             return Q(obs_shape, act_shape)
 
-    def __init(self, observation_space, action_space,
+    def __init(self, obs_sample, action_space,
                eps_start: float = 1.0,
                eps_end: float = 0.02,
                eps_last_frame: int = 150000,
                gamma: float = 0.99,
                qv: bool = False,
                ):
-        obs_shape = self.get_net_obs_shape(observation_space)
+        # Set hyperparams
+        self.gamma = gamma
+        # Get in-out shapes:
+        obs_shape = self.get_net_obs_shape(obs_sample)
         act_shape = self.get_net_act_shape(action_space)
         # Create feature extraction network
         self.obs_feature_net = CNN(obs_shape)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
         self.policy = self.create_policy(obs_feature_shape, act_shape, use_QV=qv)
-        # Set hyperparams
-        self.gamma = gamma
+        # Create replay buffer:
+
 
     def update_self(self, steps):
         """

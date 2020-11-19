@@ -6,10 +6,7 @@ from torch.utils.data import random_split, DataLoader
 from torchvision.datasets import MNIST
 from torchvision import transforms
 
-
-Experience = namedtuple(
-    "Experience", field_names=["state", "action", "reward", "done", "new_state"]
-)
+from roboro.env_wrappers import create_env
 
 
 def train_batch(self):
@@ -22,26 +19,6 @@ def train_batch(self):
     episode_steps = 0
 
     while self.total_steps % self.batches_per_epoch != 0:
-        self.total_steps += 1
-        # Act
-        action = self.agent(self.state)
-        # Env step
-        next_state, r, is_done, _ = self.env.step(action[0])
-        episode_reward += r
-        episode_steps += 1
-        # Buffer update
-        self.agent.update_epsilon(self.global_step)
-        self.buffer.append(state=self.state, action=action[0], reward=r, done=is_done, new_state=next_state)
-        self.state = next_state
-
-        if is_done:
-            # self.done_episodes += 1
-            # self.total_rewards.append(episode_reward)
-            # self.total_episode_steps.append(episode_steps)
-            # self.avg_rewards = float(np.mean(self.total_rewards[-self.avg_reward_len:]))
-            self.state = self.env.reset()
-            # episode_steps = 0
-            # episode_reward = 0
 
         # Sample train batch:
         states, actions, rewards, dones, new_states = self.buffer.sample(self.batch_size)
@@ -147,17 +124,17 @@ class RLDataset(torch.utils.data.IterableDataset):
 
 
 class RLDataModule(pl.LightningDataModule):
-    def __init__(self, replay_size: int = 100000, expert_experiences_dataloader=None):
-
-        pass
+    def __init__(self, replay_buffer, val_env=None, test_env=None, batch_size=16):
+        self.replay_buffer = replay_buffer
+        self.batch_size = batch_size
 
     def _dataloader(self) -> DataLoader:
         """Initialize the Replay Buffer dataset used for retrieving experiences"""
-        self.buffer = MultiStepBuffer(self.replay_size, self.n_steps)
-        self.populate(self.warm_start_size)
+        return RLDataLoader(self.replay_buffer, self.batch_size)
 
-        self.dataset = ExperienceSourceDataset(self.train_batch)
-        return DataLoader(dataset=self.dataset, batch_size=self.batch_size)
+
+        #self.dataset = ExperienceSourceDataset(self.train_batch)
+        #return DataLoader(dataset=self.dataset, batch_size=self.batch_size)
 
     def train_dataloader(self) -> DataLoader:
         """Get train loader"""
