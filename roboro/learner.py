@@ -1,5 +1,5 @@
 import argparse
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Optional, Any
 
 import numpy as np
 import pytorch_lightning as pl
@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from roboro.agent import Agent
 from roboro.env_wrappers import create_env
+from roboro.data import RLDataModule, RLBuffer
 
 
 class Learner(pl.LightningModule):
@@ -41,7 +42,7 @@ class Learner(pl.LightningModule):
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
                  warm_start_size: int = 10000,
-                 avg_reward_len: int = 100,
+                 buffer_size=100000,
                  seed: int = 123,
                  steps_per_epoch: int = 1000,
                  frame_stack: int = 4,
@@ -51,23 +52,20 @@ class Learner(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         # init train_env
-        assert train_env is not None or train_ds is not None, "Can't fit agent without training data!"
-        self.train_env, self.train_dl = None, None
-        if train_env is not None:
-            self.train_env, self.train_obs = create_env(train_env, frameskip, frame_stack, grayscale)
-        if train_ds is not None:
-            self.train_dl = create_dl(train_ds)
-            # TODO: make train/val/test split and use it
-        # init val loader
-        self.val_env, self.val_dl = self.train_env, self.train_dl
-        if val_env is not None:
-            self.val_env = create_env(val_env, frameskip, frame_stack, grayscale)
-        if val_ds is not None:
-            self.val_dl = create_dl(val_ds)
-        elif self.train_dl is not None:
-            self.val_dl = self.train_dl
+        update_freq = 0
+        self.buffer = RLBuffer(buffer_size)
+        self.datamodule = RLDataModule(self.buffer,
+                                       train_env, train_ds,
+                                       val_env, val_ds,
+                                       test_env, test_ds,
+                                       frame_stack=frame_stack,
+                                       frameskip=frameskip,
+                                       grayscale=grayscale)
+        self.train_env, self.train_obs = self.datamodule.get_train_env()
+        self.val_env, self.val_obs = self.datamodule.get_val_env()
+        self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
-        self.agent = Agent(self.train_env.sample(), self.train_env.action_space)
+        self.agent = Agent(self.train_env.observation_space.sample(), self.train_env.action_space)
 
         # init counters
         self.total_steps = 0
@@ -110,14 +108,36 @@ class Learner(pl.LightningModule):
         # update target nets, epsilon, etc:
         self.agent.update_self(self.total_steps)
         # update buffer
-        self.agent.update_buffer(extra_info)
+        self.buffer.update(extra_info)
 
         self.log('steps', self.total_steps, on_step=True, on_epoch=True, prog_bar=True, logger=False)
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
-    def val_step(self, *args, **kwargs):
+    def val_step(self, batch, *args, **kwargs):
+        if batch is not None:
+            # TODO: do evaluation on random episodes of data
+            pass
+
+    def test_step(self, batch, *args, **kwargs):
+        if batch is not None:
+            # TODO: do evaluation on random episodes of data
+            pass
+
+    def validation_epoch_end(self, outputs: List[Any]) -> None:
         """Evaluate the agent for n episodes"""
+        if self.val_env is None:
+            return
+        n = 5
+        val_reward_lists = self.run(self.val_env, n_eps=n, epsilon=0)
+        assert n == len(val_reward_lists)
+        avg_return = sum(val_reward_lists) / n
+        self.log('val_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+    def test_epoch_end(self, outputs: List[Any]) -> None:
+        """Evaluate the agent for n episodes"""
+        if self.test_env is None:
+            return
         n = 5
         test_reward_lists = self.run(self.test_env, n_eps=n, epsilon=0)
         assert n == len(test_reward_lists)
@@ -125,9 +145,8 @@ class Learner(pl.LightningModule):
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def configure_optimizers(self) -> List[Optimizer]:
-        """ Initialize Adam optimizer"""
-        optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        return [optimizer]
+            optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+            return [optimizer]
 
     def step(self, obs, store=False):
         obs = obs.to(self.device, self.dtype)
@@ -149,6 +168,10 @@ class Learner(pl.LightningModule):
             self.total_steps += 1
             if self.total_steps % self.steps_per_epoch:
                 self.should_stop = True
+
+    def on_train_start(self):
+        if self.warm_start > 0:
+            self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
 
     def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False) -> List[int]:
         """
@@ -185,10 +208,6 @@ class Learner(pl.LightningModule):
         self.agent.epsilon = eps
 
         return total_rewards
-
-    def on_train_start(self):
-        if self.warm_start > 0:
-            self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
 
     def get_progress_bar_dict(self):
         """

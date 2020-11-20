@@ -7,7 +7,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 from roboro.agent import Agent
 from roboro.learner import Learner
-from roboro.data import RLDataModule
 
 
 def test_agent(agent, env):
@@ -15,7 +14,7 @@ def test_agent(agent, env):
     done = False
     total_return = 0
     while not done:
-        action = learner(state)
+        action = agent(state)
         next_state, reward, _ = env.step(action)
         state = next_state
         env.render()
@@ -25,17 +24,17 @@ def test_agent(agent, env):
 
 parser = ArgumentParser()
 # Add PROGRAM level args
-parser.add_argument('--conda_env', type=str, default='some_name')
+parser.add_argument('--train_env', type=str, default='CartPole-v0')
+parser.add_argument('--path', type=str)
 parser.add_argument('--notification_email', type=str, default='will@email.com')
 # Add model specific args
 parser = Agent.add_model_specific_args(parser)
-parser = Learner.add_model_specific_args(parser)
+#parser = Learner.add_model_specific_args(parser)
 # Parse
 args = parser.parse_args()
 # Create train_env
 env_str = args.train_env
 env = gym.make(env_str)
-env_data_module = RLDataModule(env)
 # Create agent and learner
 if args.path is not None:
     # load from checkpoint
@@ -43,8 +42,8 @@ if args.path is not None:
     agent = learner.agent
 else:
     # create from scratch
-    agent = Agent(env.observation_space, env.action_space)
-    learner = Learner(agent, env)
+    learner = Learner(train_env=env_str)
+    agent = learner.agent
     # Test agent before training:
     total_return = test_agent(agent, env)
     print("Return of learner: ", total_return)
@@ -63,7 +62,7 @@ else:
             gpus=0,
             callbacks=[checkpoint_callback]
     )
-    trainer.fit(Learner)
+    trainer.fit(learner)
     trainer.save_checkpoint("after_training.ckpt")
 # Test the agent after training:
 total_return = test_agent(learner, env)

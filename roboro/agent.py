@@ -24,13 +24,14 @@ class Agent(torch.nn.Module):
         else:
             return Q(obs_shape, act_shape)
 
-    def __init(self, obs_sample, action_space,
-               eps_start: float = 1.0,
-               eps_end: float = 0.02,
-               eps_last_frame: int = 150000,
-               gamma: float = 0.99,
-               qv: bool = False,
-               ):
+    def __init__(self, obs_sample, action_space,
+                 eps_start: float = 1.0,
+                 eps_end: float = 0.02,
+                 eps_last_frame: int = 150000,
+                 gamma: float = 0.99,
+                 qv: bool = False,
+                 ):
+        super().__init__()
         # Set hyperparams
         self.gamma = gamma
         # Get in-out shapes:

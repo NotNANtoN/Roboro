@@ -24,7 +24,7 @@ def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
     # Apply Wrappers:
     if CustomWrapper is not None:
         env = CustomWrapper(env)
-    if any(atari_name in env.lower() for atari_name in atari_env_names):
+    if any(atari_name in env_name.lower() for atari_name in atari_env_names):
         env = AtariObsWrapper(env)
     if grayscale:
         env = ToGrayScale(env)
@@ -38,17 +38,24 @@ def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
 
 
 class ToGrayScale(gym.ObservationWrapper):
-    def __init__(self, sample):
-        assert sample.ndim == 4
-        self.dtype = sample.dtype
-        if sample.shape[1] == 3:
+    def __init__(self, env):
+        super().__init__(env)
+        self.dtype = None
+        self.mean_dim = None
+
+    def setup(self, obs):
+        assert obs.ndim == 4
+        self.dtype = obs.dtype
+        if obs.shape[1] == 3:
             self.mean_dim = 1
-        elif sample.shape[-1] == 3:
+        elif obs.shape[-1] == 3:
             self.mean_dim = -1
         else:
             raise ValueError("Observation is not an RGB image!")
 
     def observation(self, obs):
+        if self.mean_dim is None:
+            self.setup(obs)
         obs = np.expand_dims(obs.mean(axis=self.mean_dim).astype(self.dtype), axis=0)
         return obs
 
@@ -164,7 +171,7 @@ class LazyFrames:
         self.obs_is_dict = isinstance(self._frames[0], dict)
         self.stack_dim = stack_dim
 
-    def _force(self):
+    def get_stacked_frames(self):
         return self.stack_frames(self._frames)
 
     def stack_frames(self, frames):
@@ -175,18 +182,18 @@ class LazyFrames:
         return torch.cat(list(frames), dim=self.stack_dim)
 
     def make_state(self):
-        return self._force()
+        return self.get_stacked_frames()
 
     def __array__(self, dtype=None):
         print("Access forbidden array")
-        out = self._force()
+        out = self.get_stacked_frames()
         if dtype is not None:
             out = out.type(dtype)
         return out
 
     def __len__(self):
         print("Access forbidden len")
-        return len(self._force())
+        return len(self.get_stacked_frames())
 
     def __getitem__(self, i):
         print("Access forbidden getitem")
@@ -194,9 +201,9 @@ class LazyFrames:
 
     def count(self):
         print("Access forbidden count")
-        frames = self._force()
+        frames = self.get_stacked_frames()
         return frames.shape[frames.ndim - 1]
 
     def frame(self, i):
         print("Access forbidden frame")
-        return self._force()[..., i]
+        return self.get_stacked_frames()[..., i]
