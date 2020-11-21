@@ -184,6 +184,9 @@ class LazyFrames:
     def make_state(self):
         return self.get_stacked_frames()
 
+    def to(self, *args, **kwargs):
+        return self.make_state().to(*args, **kwargs)
+
     def __array__(self, dtype=None):
         print("Access forbidden array")
         out = self.get_stacked_frames()

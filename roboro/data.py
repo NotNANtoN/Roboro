@@ -3,6 +3,7 @@ from collections import deque, defaultdict
 
 import pytorch_lightning as pl
 import torch
+import numpy as np
 from torch.utils.data import random_split, DataLoader
 from torchvision.datasets import MNIST
 from torchvision import transforms
@@ -32,20 +33,21 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def __getitem__(self, idx):
         """ Return a single transition """
         # Check if there is a next_state, if so stack frames:
-        next_index = self.increment_idx(idx)
+        next_index = idx + 1
         is_end = self.dones[idx]
         # Stack states:
         state = self.states[idx]
-        next_state = self.states[next_index] if not is_end else None
+        next_state = self.states[next_index] if not is_end else state
         # Stack frames if needed
         if isinstance(self.states[idx], LazyFrames):
             state = state.get_stacked_frames()
             next_state = next_state.get_stacked_frames() if next_state is not None else None
         state = state.squeeze(0)
-        next_state = next_state.squeeze(0) if next_state is not None else None
+        next_state = next_state.squeeze(0)
         # Return extra info
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
-        return state, self.actions[idx], self.rewards[idx], next_state, idx, extra_info
+        extra_info["idx"] = idx
+        return state, self.actions[idx], self.rewards[idx], is_end, next_state, extra_info
 
     def __iter__(self):
         count = 0
@@ -75,6 +77,9 @@ class RLBuffer(torch.utils.data.IterableDataset):
 
     def add_field(self, name, val):
         self.extra_info[name].append(val)
+
+    def update(self, extra_info):
+        pass
 
 
 from torch.utils.data import random_split
@@ -124,11 +129,12 @@ class RLDataModule(pl.LightningDataModule):
         return self._dataloader(self.buffer)
 
     def val_dataloader(self) -> DataLoader:
-        return self.test_dl
+        return self.val_dl
+        #return self.train_dataloader()
 
     def test_dataloader(self) -> DataLoader:
         """Get test loader"""
-        return self.val_dl
+        return self.test_dl
 
     def get_train_env(self):
         return self.train_env, self.train_obs

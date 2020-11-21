@@ -1,64 +1,60 @@
 import torch
 
-from roboro.networks import MLP, CNN
+from roboro.networks import MLP
+
 
 class Q(torch.nn.Module):
-    def __init__(self, obs_shape, act_shape):
+    def __init__(self, obs_shape, act_shape, gamma, **net_kwargs):
         super().__init__()
-        self.q_net = MLP(obs_shape, act_shape)
-        self.q_net_target = MLP(obs_shape, act_shape)
+        self.gamma = gamma
+        self.q_net = MLP(obs_shape, act_shape, **net_kwargs)
+        self.q_net_target = MLP(obs_shape, act_shape, **net_kwargs)
 
     def forward(self, obs):
-        q_vals = self.calc_vals(obs, self.q_net)
+        q_vals = self.q_net(obs)
         action_preferences = torch.softmax(q_vals, dim=1)
         return action_preferences
 
-    def calc_vals(self, obs, net):
-        obs_features = self.obs_feature_net(obs)
-        vals = net(obs_features)
-        return vals
-
     @torch.no_grad()
-    def calc_next_obs_q_vals(self, next_obs, done_flags, net):
+    def calc_next_obs_q_vals(self, non_final_next_obs, done_flags, net):
         """If a done_flag is set the next obs val is 0, else calculate it"""
-        q_vals_next = torch.zeros(done_flags, device=done_flags.device)
-        non_final_idcs = torch.where(done_flags)
-        non_final_next_obs = next_obs[non_final_idcs]
-        non_final_q_vals = self.calc_vals(non_final_next_obs, net)
-        q_vals_next[non_final_idcs] = torch.max(non_final_q_vals, dim=1)[0]
+        q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device)
+        non_final_q_vals = net(non_final_next_obs)
+        q_vals_next[~done_flags] = torch.max(non_final_q_vals, dim=1)[0]
         return q_vals_next
 
-    def calc_q_target_val(self, rewards, done_flags, next_obs):
-        q_vals_next = self.calc_next_obs_q_vals(next_obs, done_flags, self.q_net_target)
+    def calc_q_target_val(self, rewards, done_flags, non_final_next_obs):
+        q_vals_next = self.calc_next_obs_q_vals(non_final_next_obs, done_flags, self.q_net_target)
         target_q_vals = rewards + self.gamma * q_vals_next
         return target_q_vals
 
-    def mse_loss_q(self, obs, actions, rewards, done_flags, next_obs):
-        pred_q_vals = self.calc_vals(obs, self.q_net).gather(actions, dim=1)
-        target_q_vals = self.calc_q_target(rewards, done_flags, next_obs)
-        loss = (target_q_vals - pred_q_vals) ** 2
+    def mse_loss_q(self, obs, actions, rewards, done_flags, non_final_next_obs):
+        pred_q_vals = self.q_net(obs)
+        # TODO: isn't here a better method than this stupid gather?
+        chosen_action_q_vals = pred_q_vals.gather(dim=1, index=actions.unsqueeze(1)).squeeze()
+        target_q_vals = self.calc_q_target_val(rewards, done_flags, non_final_next_obs)
+        loss = (target_q_vals - chosen_action_q_vals) ** 2
+        loss = loss.mean()
         return loss
 
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        loss = self.mse_loss_q(self, obs, actions, rewards, done_flags, next_obs)
+    def calc_loss(self, obs, actions, rewards, done_flags, non_final_next_obs, extra_info):
+        loss = self.mse_loss_q(obs, actions, rewards, done_flags, non_final_next_obs)
         return loss
 
 
 class QV(Q):
     """Train an additional state value network and train the q_net using it"""
-    def __init__(self, obs_shape, act_shape):
-        super().__init__(obs_shape, act_shape)
+    def __init__(self, obs_shape, act_shape, gamma):
+        super().__init__(obs_shape, act_shape, gamma)
         v_out_shape = [1]
         self.v_net = MLP(obs_shape, v_out_shape)
         self.v_net_target = MLP(obs_shape, v_out_shape)
 
     @torch.no_grad()
-    def calc_next_obs_v_vals(self, next_obs, done_flags, net):
+    def calc_next_obs_v_vals(self, non_final_next_obs, done_flags, net):
         """If a done_flag is set the next obs val is 0, else calculate it"""
-        v_vals_next = torch.zeros(done_flags, device=done_flags.device)
-        non_final_idcs = torch.where(done_flags)
-        non_final_next_obs = next_obs[non_final_idcs]
-        v_vals_next[non_final_idcs] = self.calc_vals(non_final_next_obs, net)
+        v_vals_next = torch.zeros(done_flags.shape, device=done_flags.device)
+        v_vals_next[~done_flags] = net(non_final_next_obs)
         return v_vals_next
 
     def calc_v_target_val(self, rewards, done_flags, next_obs):
@@ -67,17 +63,18 @@ class QV(Q):
         return target_v_vals
 
     def mse_loss_v(self, obs, rewards, done_flags, next_obs):
-        pred_v_vals = self.calc_vals(obs, self.v_net)
+        pred_v_vals = self.v_net(obs)
         target_v_vals = self.calc_v_target_val(rewards, done_flags, next_obs)
         loss = (target_v_vals - pred_v_vals) ** 2
+        loss = loss.mean()
         return loss
 
-    def calc_q_target(self, rewards, done_flags, next_obs):
+    def calc_q_target_val(self, rewards, done_flags, next_obs):
         """Overwrite this method to force Q-net to take V-net targets"""
         return self.calc_v_target_val(rewards, done_flags, next_obs)
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_loss = self.mse_loss_q(obs, actions, rewards, done_flags, next_obs)
+        q_loss = super().calc_loss(obs, actions, rewards, done_flags, next_obs, extra_info)
         v_loss = self.mse_loss_v(obs, rewards, done_flags, next_obs)
         return q_loss + v_loss
 

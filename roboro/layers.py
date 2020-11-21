@@ -3,14 +3,14 @@ import math
 import torch
 
 
-def create_block(in_shape, out_shape, width=512, noisy_linear=False):
+def create_block(in_size, out_size, width=512, noisy_linear=False):
     if noisy_linear:
         create_linear = lambda fan_in, fan_out: NoisyLinear(fan_in, fan_out)
     else:
         create_linear = lambda fan_in, fan_out: torch.nn.Linear(fan_in, fan_out)
-    module_list = [create_linear(in_shape, width),
+    module_list = [create_linear(in_size, width),
                    torch.nn.ReLU(True),
-                   create_linear(width, out_shape)]
+                   create_linear(width, out_size)]
     modules = torch.nn.Sequential(*module_list)
     return modules
 

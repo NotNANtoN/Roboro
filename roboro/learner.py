@@ -41,7 +41,7 @@ class Learner(pl.LightningModule):
                  test_ds: str = None,
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
-                 warm_start_size: int = 10000,
+                 warm_start_size: int = 1000,
                  buffer_size=100000,
                  seed: int = 123,
                  steps_per_epoch: int = 1000,
@@ -53,7 +53,7 @@ class Learner(pl.LightningModule):
         self.save_hyperparameters()
         # init train_env
         update_freq = 0
-        self.buffer = RLBuffer(buffer_size)
+        self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
         self.datamodule = RLDataModule(self.buffer,
                                        train_env, train_ds,
                                        val_env, val_ds,
@@ -73,6 +73,7 @@ class Learner(pl.LightningModule):
 
         # tracking params:
         self.should_stop = False
+        # TODO: calc steps per epoch properly
         self.steps_per_epoch = steps_per_epoch
         self.steps_per_train = 1
 
@@ -81,30 +82,23 @@ class Learner(pl.LightningModule):
         self.batch_size = batch_size
         self.lr = learning_rate
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Passes in a state x through the network and gets the q_values of each action as an output
-        Args:
-            x: environment state
-        Returns:
-            q values
-        """
-        output = self.agent(x)
-        return output
+    def forward(self, x: torch.Tensor) -> int:
+        actions = self.agent(x)
+        return actions
 
-    def training_step(self, batch):
+    def training_step(self, batch, batch_idx):
         """
         Carries out a single step through the environment to update the replay buffer.
         Then calculates loss based on the minibatch recieved
         Args:
             batch: current mini batch of replay data
+            batch_idx: idx of mini batch - not needed
         Returns:
             Training loss and log metrics
         """
-        if self.should_stop:
-            return -1
         # calculates training loss
         loss, extra_info = self.agent.calc_loss(*batch)
+
         # update target nets, epsilon, etc:
         self.agent.update_self(self.total_steps)
         # update buffer
@@ -114,7 +108,7 @@ class Learner(pl.LightningModule):
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
-    def val_step(self, batch, *args, **kwargs):
+    def validation_step(self, batch, *args, **kwargs):
         if batch is not None:
             # TODO: do evaluation on random episodes of data
             pass
@@ -124,15 +118,19 @@ class Learner(pl.LightningModule):
             # TODO: do evaluation on random episodes of data
             pass
 
-    def validation_epoch_end(self, outputs: List[Any]) -> None:
+    def on_epoch_end(self):#(self, outputs: List[Any]) -> None:
         """Evaluate the agent for n episodes"""
+        print("DO EVAL:")
+        # TODO: Now eval is done after every time going through the buffer, not every user-defined epoch
+        #quit()
         if self.val_env is None:
             return
         n = 5
         val_reward_lists = self.run(self.val_env, n_eps=n, epsilon=0)
         assert n == len(val_reward_lists)
         avg_return = sum(val_reward_lists) / n
-        self.log('val_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        print("AVG return: ", avg_return)
+        self.log('val_return', avg_return, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
     def test_epoch_end(self, outputs: List[Any]) -> None:
         """Evaluate the agent for n episodes"""
@@ -144,32 +142,32 @@ class Learner(pl.LightningModule):
         avg_return = sum(test_reward_lists) / n
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
-    def configure_optimizers(self) -> List[Optimizer]:
-            optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-            return [optimizer]
+    def configure_optimizers(self) -> Optimizer:
+        optimizer = optim.Adam(self.agent.parameters(), lr=self.lr)
+        return optimizer
 
-    def step(self, obs, store=False):
+    def step(self, obs, env, store=False):
         obs = obs.to(self.device, self.dtype)
-        action = self(obs).squeeze(0)
-        next_state, r, is_done, _ = self.train_env.step(action)
+        action = self(obs).item()
+        next_state, r, is_done, _ = env.step(action)
         # add to buffer
         if store:
-            self.buffer.append(state=self.train_obs, action=action, reward=r, done=is_done, new_state=next_state)
+            self.buffer.add(state=obs, action=action, reward=r, done=is_done)
         return next_state, action, r, is_done
 
-    def on_batch_start(self):
+    def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
         """ Determines how many steps to do in the train_env and runs them"""
         for _ in range(self.steps_per_train):
-            next_state, action, r, is_done = self.step(self.train_obs, store=True)
+            next_state, action, r, is_done = self.step(self.train_obs, self.train_env, store=True)
             self.train_obs = next_state
             if is_done:
                 self.train_obs = self.train_env.reset()
                 self.episode_counter += 1
             self.total_steps += 1
-            if self.total_steps % self.steps_per_epoch:
+            if self.total_steps % self.steps_per_epoch == 0:
                 self.should_stop = True
 
-    def on_train_start(self):
+    def on_fit_start(self):
         if self.warm_start > 0:
             self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
 
@@ -185,19 +183,20 @@ class Learner(pl.LightningModule):
         """
         assert n_steps or n_eps
 
-        eps = self.agent.epsilon
+        agent_epsilon = self.agent.epsilon
         if epsilon is not None:
             self.agent.epsilon = epsilon
         total_rewards = []
         steps = 0
+        eps = 0
 
         while (not n_steps or steps < n_steps) and (not n_eps or eps < n_eps):
             episode_state = env.reset()
-            done = False
+            is_done = False
             episode_reward = 0
 
-            while not done:
-                next_state, action, r, is_done = self.step(episode_state, store=store)
+            while not is_done:
+                next_state, action, r, is_done = self.step(episode_state, env, store=store)
 
                 episode_state = next_state
                 episode_reward += r
@@ -205,7 +204,7 @@ class Learner(pl.LightningModule):
             total_rewards.append(episode_reward)
             eps += 1
 
-        self.agent.epsilon = eps
+        self.agent.epsilon = agent_epsilon
 
         return total_rewards
 

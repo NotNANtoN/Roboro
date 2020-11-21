@@ -20,9 +20,9 @@ class CNN(torch.nn.Module):
                        torch.nn.ReLU(True)]
         self.conv = torch.nn.Sequential(*module_list)
 
-        self.conv_out_size = self.get_out_size(input_shape)
+        self.conv_out_size = self.get_conv_out_size(input_shape)
 
-    def get_out_size(self, shape) -> int:
+    def get_conv_out_size(self, shape) -> int:
         """
         Calculates the output size of the last conv layer
         Args:
@@ -37,10 +37,14 @@ class CNN(torch.nn.Module):
         conv_out = self.conv(obs).view(obs.shape[0], -1)
         return conv_out
 
+    def get_out_size(self):
+        return self.conv_out_size
+
 
 class MLP(torch.nn.Module):
     def __init__(self, in_size, out_size, dueling=False, noisy=False, width=512):
         super().__init__()
+        self.out_size = out_size
         linear_kwargs = {"noisy_linear": noisy, "width": width}
         self.in_to_hidden = create_block(in_size, width, **linear_kwargs)
         if dueling:
@@ -52,3 +56,6 @@ class MLP(torch.nn.Module):
         hidden = self.in_to_hidden(state_features)
         out = self.hidden_to_out(hidden)
         return out
+
+    def get_out_size(self):
+        return self.out_size
