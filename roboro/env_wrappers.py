@@ -21,6 +21,8 @@ atari_env_names = ['adventure', 'airraid', 'alien', 'amidar', 'assault', 'asteri
 def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
     # Init train_env:
     env = gym.make(env_name)
+
+    # TODO: add Normalization wrapper in this function!
     # Apply Wrappers:
     if CustomWrapper is not None:
         env = CustomWrapper(env)
@@ -70,9 +72,8 @@ class AtariObsWrapper(gym.ObservationWrapper):
     """Cut out a 80x80 square, kill object flickering by taking the max of all pixels between two consecutive frames,
     convert to grayscale if needed, convert to torch tensor, permute dimensions of tensor to have channels first and
     convert to int8 (byte) data type."""
-    def __init__(self, env, rgb2gray):
+    def __init__(self, env):
         super().__init__(env)
-        self.rgb2gray = rgb2gray
         self.last_obs = None
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1, 80, 80), dtype=env.observation_space.dtype)
 
