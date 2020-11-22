@@ -31,21 +31,25 @@ class Q(torch.nn.Module):
     def calc_q_target_val(self, rewards, done_flags, non_final_next_obs):
         q_vals_next = self.calc_next_obs_q_vals(non_final_next_obs, done_flags, self.q_net_target)
         assert q_vals_next.shape == rewards.shape
-        target_q_vals = rewards + self.gamma * q_vals_next
-        return target_q_vals
+        targets = rewards + self.gamma * q_vals_next
+        return targets
 
-    def mse_loss_q(self, obs, actions, rewards, done_flags, non_final_next_obs):
+    def get_q_preds(self, obs, actions):
         pred_q_vals = self.q_net(obs)
         # TODO: isn't here a better method than this stupid gather?
         chosen_action_q_vals = pred_q_vals.gather(dim=1, index=actions.unsqueeze(1)).squeeze()
+        return chosen_action_q_vals
+
+    def mse_loss(self, obs, actions, rewards, done_flags, non_final_next_obs):
+        preds = self.get_q_preds(obs, actions)
         target_q_vals = self.calc_q_target_val(rewards, done_flags, non_final_next_obs)
-        assert target_q_vals.shape == chosen_action_q_vals.shape
-        loss = (target_q_vals - chosen_action_q_vals) ** 2
+        assert target_q_vals.shape == preds.shape
+        loss = (target_q_vals - preds) ** 2
         loss = loss.mean()
         return loss
 
     def calc_loss(self, obs, actions, rewards, done_flags, non_final_next_obs, extra_info):
-        loss = self.mse_loss_q(obs, actions, rewards, done_flags, non_final_next_obs)
+        loss = self.mse_loss(obs, actions, rewards, done_flags, non_final_next_obs)
         return loss
 
     def update_target_nets_hard(self):
@@ -57,39 +61,35 @@ class Q(torch.nn.Module):
 
 class QV(Q):
     """Train an additional state value network and train the q_net using it"""
-    def __init__(self, obs_shape, act_shape, gamma):
+    def __init__(self, obs_shape, act_shape, gamma, **net_kwargs):
         super().__init__(obs_shape, act_shape, gamma)
-        v_out_shape = [1]
-        self.v_net = MLP(obs_shape, v_out_shape)
-        self.v_net_target = MLP(obs_shape, v_out_shape)
+        v_out_size = 1
+        self.v_net = MLP(obs_shape, v_out_size, **net_kwargs)
+        self.v_net_target = MLP(obs_shape, v_out_size, **net_kwargs)
 
     @torch.no_grad()
     def calc_next_obs_v_vals(self, non_final_next_obs, done_flags, net):
         """If a done_flag is set the next obs val is 0, else calculate it"""
         v_vals_next = torch.zeros(done_flags.shape, device=done_flags.device)
-        v_vals_next[~done_flags] = net(non_final_next_obs)
+        v_vals_next[~done_flags] = net(non_final_next_obs).squeeze(1)
         return v_vals_next
 
     def calc_v_target_val(self, rewards, done_flags, next_obs):
         v_vals_next = self.calc_next_obs_v_vals(next_obs, done_flags, self.v_net_target)
-        target_v_vals = rewards + self.gamma * v_vals_next
-        return target_v_vals
+        targets = rewards + self.gamma * v_vals_next
+        return targets
 
-    def mse_loss_v(self, obs, rewards, done_flags, next_obs):
-        pred_v_vals = self.v_net(obs)
-        target_v_vals = self.calc_v_target_val(rewards, done_flags, next_obs)
-        loss = (target_v_vals - pred_v_vals) ** 2
-        loss = loss.mean()
+    def mse_loss(self, obs, actions, rewards, done_flags, next_obs):
+        # V loss
+        preds_v = self.v_net(obs)
+        targets = self.calc_v_target_val(rewards, done_flags, next_obs)
+        v_loss = (targets - preds_v) ** 2
+        # Q loss
+        preds_q = self.get_q_preds(obs, actions)
+        # summed loss
+        q_loss = (targets - preds_q) ** 2
+        loss = (q_loss + v_loss).mean()
         return loss
-
-    def calc_q_target_val(self, rewards, done_flags, next_obs):
-        """Overwrite this method to force Q-net to take V-net targets"""
-        return self.calc_v_target_val(rewards, done_flags, next_obs)
-
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_loss = super().calc_loss(obs, actions, rewards, done_flags, next_obs, extra_info)
-        v_loss = self.mse_loss_v(obs, rewards, done_flags, next_obs)
-        return q_loss + v_loss
 
     def update_target_nets_hard(self):
         super().update_target_nets_hard()

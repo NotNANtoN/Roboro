@@ -29,6 +29,7 @@ class Learner(pl.LightningModule):
     """
 
     def __init__(self,
+                 max_steps: int = 100000,
                  train_env: str = None,
                  train_ds: str = None,
                  val_env: str = None,
@@ -72,8 +73,8 @@ class Learner(pl.LightningModule):
         self.epoch_steps = 0
 
         # tracking params:
-        # TODO: calc steps per epoch properly
-        self.steps_per_epoch = steps_per_epoch
+        # TODO: calc steps by giving percentage at which we want to evaluate
+        self.steps_per_epoch = max_steps / 100
         self.steps_per_train = steps_per_batch
 
         # hyperparams:

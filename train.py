@@ -45,7 +45,10 @@ if args.path is not None:
     agent = learner.agent
 else:
     # create from scratch
-    learner = Learner(train_env=env_str)
+    learner = Learner(train_env=env_str,
+                      frameskip=args.frameskip,
+                      steps_per_batch=args.steps_per_batch,
+                      )
     agent = learner.agent
     # Do the training!
     time = time.strftime('%d-%h_%H:%M:%S', time.gmtime())
@@ -73,9 +76,8 @@ else:
     args.callbacks = [checkpoint_callback]
     args.logger = mlf_logger
     args.weight_summary = "full"
-    trainer = Trainer.from_argparse_args(
-            args
-    )
+    args.terminate_on_nan = True
+    trainer = Trainer.from_argparse_args(args)
     trainer.fit(learner)
     trainer.save_checkpoint("checkpoints/after_training.ckpt")
 # Get train env:
