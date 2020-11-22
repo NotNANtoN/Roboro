@@ -1,6 +1,7 @@
 # folders
 checkpoints/
 ml-runs/
+mlruns/
 
 # IDEs
 .idea

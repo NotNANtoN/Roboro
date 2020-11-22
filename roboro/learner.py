@@ -160,7 +160,7 @@ class Learner(pl.LightningModule):
         next_state, r, is_done, _ = env.step(action)
         # add to buffer
         if store:
-            self.buffer.add(state=obs, action=action, reward=r, done=is_done)
+            self.buffer.add(state=obs.squeeze(0), action=action, reward=r, done=is_done)
         return next_state, action, r, is_done
 
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):

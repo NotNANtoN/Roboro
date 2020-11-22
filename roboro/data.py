@@ -8,7 +8,7 @@ from torch.utils.data import random_split, DataLoader
 from torchvision.datasets import MNIST
 from torchvision import transforms
 
-from roboro.env_wrappers import create_env, LazyFrames
+from roboro.env_wrappers import create_env
 
 
 class RLBuffer(torch.utils.data.IterableDataset):
@@ -39,12 +39,6 @@ class RLBuffer(torch.utils.data.IterableDataset):
         # Stack states:
         state = self.states[idx]
         next_state = self.states[next_index] if not is_end else state
-        # Stack frames if needed
-        if isinstance(self.states[idx], LazyFrames):
-            state = state.get_stacked_frames()
-            next_state = next_state.get_stacked_frames() if next_state is not None else None
-        state = state.squeeze(0)
-        next_state = next_state.squeeze(0)
         # Return extra info
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
         extra_info["idx"] = idx
@@ -123,7 +117,7 @@ class RLDataModule(pl.LightningDataModule):
         #    self.val_dl = create_dl(val_ds)
 
     def _dataloader(self, ds) -> DataLoader:
-        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=0)
 
     def train_dataloader(self) -> DataLoader:
         """Get train loader"""

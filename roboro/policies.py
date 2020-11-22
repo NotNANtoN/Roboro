@@ -3,6 +3,11 @@ import torch
 from roboro.networks import MLP
 
 
+def polyak_update(net, target_net, factor):
+    for target_param, param in zip(target_net.parameters(), net.parameters()):
+        target_param.data.copy_(factor * target_param.data + param.data * (1.0 - factor))
+
+
 class Q(torch.nn.Module):
     def __init__(self, obs_shape, act_shape, gamma, **net_kwargs):
         super().__init__()
@@ -47,11 +52,7 @@ class Q(torch.nn.Module):
         self.q_net_target.load_state_dict(self.q_net.state_dict())
 
     def update_target_nets_soft(self, val):
-        self.polyak_update(self.q_net, self.q_net_target, val)
-
-    def polyak_update(self, net, target_net, factor):
-        for target_param, param in zip(target_net.parameters(), net.parameters()):
-            target_param.data.copy_(factor * target_param.data + param.data * (1.0 - factor))
+        polyak_update(self.q_net, self.q_net_target, val)
 
 
 class QV(Q):
@@ -96,7 +97,8 @@ class QV(Q):
 
     def update_target_nets_soft(self, val):
         super().update_target_nets_soft(val)
-        self.polyak_update(self.v_net, self.v_net_target, val)
+        polyak_update(self.v_net, self.v_net_target, val)
+
 
 class Ensemble(torch.nn.Module):
     def __init__(self, obs_shape, act_shape, PolicyClass):
