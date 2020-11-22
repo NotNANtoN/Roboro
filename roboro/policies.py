@@ -23,7 +23,7 @@ class Q(torch.nn.Module):
     @torch.no_grad()
     def calc_next_obs_q_vals(self, non_final_next_obs, done_flags, net):
         """If a done_flag is set the next obs val is 0, else calculate it"""
-        q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device)
+        q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
         non_final_q_vals = net(non_final_next_obs)
         q_vals_next[~done_flags] = torch.max(non_final_q_vals, dim=1)[0]
         return q_vals_next
@@ -66,7 +66,7 @@ class QV(Q):
     @torch.no_grad()
     def calc_next_obs_v_vals(self, non_final_next_obs, done_flags, net):
         """If a done_flag is set the next obs val is 0, else calculate it"""
-        v_vals_next = torch.zeros(done_flags.shape, device=done_flags.device)
+        v_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
         v_vals_next[~done_flags] = net(non_final_next_obs)
         return v_vals_next
 

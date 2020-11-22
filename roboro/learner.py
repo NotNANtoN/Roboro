@@ -101,6 +101,11 @@ class Learner(pl.LightningModule):
         Returns:
             Training loss and log metrics
         """
+        # convert to correct type:
+        from roboro.utils import apply_to_state
+        batch[0] = apply_to_state(lambda x: x.to(self.dtype), batch[0])  # state
+        batch[4] = apply_to_state(lambda x: x.to(self.dtype), batch[4])  # next state
+        # TODO: isn't there a better solution to this?
         # calculates training loss
         loss, extra_info = self.agent.calc_loss(*batch)
 
@@ -155,7 +160,6 @@ class Learner(pl.LightningModule):
         return optimizer
 
     def step(self, obs, env, store=False):
-        obs = obs.to(self.device, self.dtype)
         action = self(obs)
         next_state, r, is_done, _ = env.step(action)
         # add to buffer
