@@ -45,7 +45,8 @@ if args.path is not None:
     agent = learner.agent
 else:
     # create from scratch
-    learner = Learner(train_env=env_str,
+    learner = Learner(max_steps=args.steps,
+                      train_env=env_str,
                       frameskip=args.frameskip,
                       steps_per_batch=args.steps_per_batch,
                       )
@@ -68,7 +69,9 @@ else:
     #         patience=3,
     #         verbose=False,
     # )
-    args.max_steps = args.steps / args.frameskip / args.steps_per_batch
+    frameskip = args.frameskip if args.frameskip > 0 else 1
+    max_batches = args.steps / frameskip / args.steps_per_batch
+    args.max_steps = max_batches
     print("Number of env steps to train on: ", args.steps)
     print("Number of batches to train on: ", args.max_steps)
     args.early_stopping_callback = []
