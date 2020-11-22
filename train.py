@@ -2,7 +2,7 @@ import time
 from argparse import ArgumentParser
 
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import MLFlowLogger
 
 from roboro.agent import Agent
@@ -15,10 +15,9 @@ def test_agent(agent, env):
     total_return = 0
     while not done:
         action = agent(state)
-        print("Action: ", action)
         next_state, reward, done, _ = env.step(action)
         state = next_state
-        env.render()
+        #env.render()
         total_return += reward
     env.close()
     return total_return
@@ -28,6 +27,10 @@ parser = ArgumentParser()
 # Add PROGRAM level args
 parser.add_argument('--train_env', type=str, default='CartPole-v0')
 parser.add_argument('--path', type=str)
+parser.add_argument('--steps', type=int, default=10000, help="max env steps")
+parser.add_argument('--frameskip', type=int, default=2, help="frameskip")
+parser.add_argument('--steps_per_batch', type=float, default=1, help="how many env steps are taken per training batch")
+
 # Add model specific args
 parser = Agent.add_model_specific_args(parser)
 #parser = Learner.add_model_specific_args(parser)
@@ -54,13 +57,22 @@ else:
         mode='max')
     mlf_logger = MLFlowLogger(
             experiment_name="default",
-            tracking_uri="file:./ml-runs"
+            #tracking_uri="file:./ml-runs"
     )
-    args.max_steps = 200
+    # early_stop_callback = EarlyStopping(
+    #         monitor='steps',
+    #         min_delta=0.00,
+    #         patience=3,
+    #         verbose=False,
+    # )
+    args.max_steps = args.steps / args.frameskip / args.steps_per_batch
+    print("Number of env steps to train on: ", args.steps)
+    print("Number of batches to train on: ", args.max_steps)
     args.early_stopping_callback = []
     args.gpus = 0
     args.callbacks = [checkpoint_callback]
     args.logger = mlf_logger
+    args.weight_summary = "full"
     trainer = Trainer.from_argparse_args(
             args
     )
@@ -73,6 +85,6 @@ total_return = test_agent(learner, env)
 print("Return of learner: ", total_return)
 
 # Test agent using internal function:
-total_return = learner.run(env, n_steps=0, n_eps=1, render=True) #epsilon = 1.0, store=False)
+total_return = learner.run(env, n_steps=0, n_eps=1, render=False) #epsilon = 1.0, store=False)
 print("Return from internal function: ", sum(total_return))
 

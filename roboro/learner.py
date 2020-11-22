@@ -41,8 +41,9 @@ class Learner(pl.LightningModule):
                  buffer_size=100000,
                  seed: int = 123,
                  steps_per_epoch: int = 100,
+                 steps_per_batch: int = 1,
                  frame_stack: int = 0,
-                 frameskip: int = 4,
+                 frameskip: int = 2,
                  grayscale: int = 0,
                  **kwargs):
         super().__init__()
@@ -62,23 +63,28 @@ class Learner(pl.LightningModule):
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
         self.agent = Agent(self.train_env.observation_space.sample(), self.train_env.action_space)
+        print(self.agent)
 
         # init counters
         self.total_steps = 0
         self.total_eps = 0
+        self.epoch_steps = 0
 
         # tracking params:
         # TODO: calc steps per epoch properly
         self.steps_per_epoch = steps_per_epoch
-        self.steps_per_train = 1
+        self.steps_per_train = steps_per_batch
 
         # hyperparams:
         self.warm_start = warm_start_size
         self.batch_size = batch_size
         self.lr = learning_rate
+        self.frameskip = frameskip
 
     def on_train_epoch_start(self) -> None:
         self.buffer.should_stop = False
+        self.total_steps += self.epoch_steps
+        self.epoch_steps = 0
 
     def forward(self, obs: torch.Tensor) -> int:
         obs = obs.to(self.device, self.dtype)
@@ -104,7 +110,7 @@ class Learner(pl.LightningModule):
         self.buffer.update(extra_info)
 
         self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
-        self.log('episodes', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        self.log('eps', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
 
         return loss
@@ -120,7 +126,6 @@ class Learner(pl.LightningModule):
             pass
 
     def on_train_start(self):
-        self.log('test', 1, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.training_epoch_end([])
 
     def training_epoch_end(self, outputs: List[Any]) -> None:
@@ -128,7 +133,8 @@ class Learner(pl.LightningModule):
         if self.val_env is None:
             return
         n = 5
-        val_reward_lists = self.run(self.val_env, n_eps=n, epsilon=0)
+        self.eval()
+        val_reward_lists = self.run(self.val_env, n_eps=n)
         assert n == len(val_reward_lists)
         avg_return = sum(val_reward_lists) / n
         self.log('val_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
@@ -138,13 +144,14 @@ class Learner(pl.LightningModule):
         if self.test_env is None:
             return
         n = 5
+        self.eval()
         test_reward_lists = self.run(self.test_env, n_eps=n)
         assert n == len(test_reward_lists)
         avg_return = sum(test_reward_lists) / n
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def configure_optimizers(self) -> Optimizer:
-        optimizer = optim.Adam(self.agent.parameters(), lr=self.lr)
+        optimizer = optim.Adam(self.agent.parameters(), lr=self.lr, eps=1e-5)
         return optimizer
 
     def step(self, obs, env, store=False):
@@ -161,48 +168,48 @@ class Learner(pl.LightningModule):
         for _ in range(self.steps_per_train):
             next_state, action, r, is_done = self.step(self.train_obs, self.train_env, store=True)
             self.train_obs = next_state
+            self.epoch_steps += 1 if self.frameskip <= 1 else self.frameskip
             if is_done:
                 self.train_obs = self.train_env.reset()
                 self.total_eps += 1
-            self.total_steps += 1
-            if self.total_steps % self.steps_per_epoch == 0:
-                #  force buffer to return None in next it
-                self.buffer.should_stop = True
+                if self.epoch_steps > self.steps_per_epoch:
+                    #  force buffer to return None in next it
+                    self.buffer.should_stop = True
 
     def on_fit_start(self):
         if self.warm_start > 0:
             self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
+            self.train_obs = self.train_env.reset()
 
     def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False, render=False) -> List[int]:
         """
-        Carries out N episodes of the environment with the current agent
+        Carries out N episodes or N steps of the environment with the current agent
         Args:
             env: environment to use, either train environment or test environment
             n_eps: number of episodes to run
             n_steps: number of steps to run
             epsilon: epsilon value for DQN agent
             store: whether to store the experiences in the replay buffer
+            render: whether to render the env
         """
         assert n_steps or n_eps
-
         agent_epsilon = self.agent.epsilon
         if epsilon is not None:
             self.agent.epsilon = epsilon
         total_rewards = []
         steps = 0
         eps = 0
+        episode_state = env.reset()
 
         while (not n_steps or steps < n_steps) and (not n_eps or eps < n_eps):
-            episode_state = env.reset()
             is_done = False
             episode_reward = 0
-
             while not is_done:
                 next_state, action, r, is_done = self.step(episode_state, env, store=store)
-
                 episode_state = next_state
                 episode_reward += r
                 steps += 1
+            episode_state = env.reset()
             total_rewards.append(episode_reward)
             eps += 1
             if render:
@@ -218,4 +225,5 @@ class Learner(pl.LightningModule):
         """
         items = super().get_progress_bar_dict()
         items.pop("v_num", None)
+
         return items

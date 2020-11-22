@@ -38,17 +38,24 @@ class Agent(torch.nn.Module):
                  gamma: float = 0.99,
                  qv: bool = False,
                  layer_width: int = 256,
+                 target_net_hard_steps: int = 200,
+                 target_net_polyak_val: float = 0.99,
+                 target_net_use_polyak: bool = True
                  ):
         super().__init__()
-        self.eps_start = eps_start
         # Set hyperparams
+        self.eps_start = eps_start
         self.epsilon = eps_start
         self.stored_epsilon = self.epsilon
+        self.target_net_hard_steps = target_net_hard_steps
+        self.target_net_polyak_val = target_net_polyak_val
+        self.target_net_use_polyak = target_net_use_polyak
         # Get in-out shapes:
         obs_shape = obs_sample.shape  #self.get_net_obs_shape(obs_sample)
         self.act_shape = get_act_len(action_space)
         print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
         # Create feature extraction network
+        # TODO: add normalization into the obs_feature_net application
         self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
@@ -58,7 +65,10 @@ class Agent(torch.nn.Module):
         """
         Update epsilon, target nets etc
         """
-        pass
+        if self.target_net_use_polyak:
+            self.policy.update_target_nets_soft(self.target_net_polyak_val)
+        elif steps % self.target_net_hard_steps == 0:
+            self.policy.update_target_nets_hard()
 
     def forward(self, obs):
         """Receives action preferences by policy and decides based off that"""
@@ -75,7 +85,7 @@ class Agent(torch.nn.Module):
         obs_feats = self.obs_feature_net(obs)
         next_obs_feats = self.obs_feature_net(next_obs[~done_flags])
         loss = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
-        # TODO: incorporate PER weigh tupdate in extra_info
+        # TODO: incorporate PER weight update in extra_info
         return loss, extra_info
 
     def eval(self):
