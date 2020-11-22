@@ -1,4 +1,5 @@
 import argparse
+import random
 
 import torch
 import gym
@@ -39,17 +40,19 @@ class Agent(torch.nn.Module):
                  layer_width: int = 256,
                  ):
         super().__init__()
+        self.eps_start = eps_start
         # Set hyperparams
         self.epsilon = eps_start
+        self.stored_epsilon = self.epsilon
         # Get in-out shapes:
         obs_shape = obs_sample.shape  #self.get_net_obs_shape(obs_sample)
-        act_shape = get_act_len(action_space)
-        print("Obs shape: ", obs_shape, " Act shape: ", act_shape)
+        self.act_shape = get_act_len(action_space)
+        print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
         # Create feature extraction network
         self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, act_shape, gamma, use_QV=qv, width=layer_width)
+        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_QV=qv, width=layer_width)
 
     def update_self(self, steps):
         """
@@ -59,8 +62,11 @@ class Agent(torch.nn.Module):
 
     def forward(self, obs):
         """Receives action preferences by policy and decides based off that"""
-        features = self.obs_feature_net(obs)
-        q_vals = self.policy(features)
+        if random.random() < self.epsilon:
+            q_vals = torch.rand(len(obs), self.act_shape)
+        else:
+            features = self.obs_feature_net(obs)
+            q_vals = self.policy(features)
         actions = torch.argmax(q_vals, dim=1)
         return actions
 
@@ -71,3 +77,10 @@ class Agent(torch.nn.Module):
         loss = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
         # TODO: incorporate PER weigh tupdate in extra_info
         return loss, extra_info
+
+    def eval(self):
+        self.stored_epsilon = self.epsilon
+        self.epsilon = 0
+
+    def train(self, mode: bool = True):
+        self.epsilon = self.stored_epsilon if self.stored_epsilon is not None else self.epsilon

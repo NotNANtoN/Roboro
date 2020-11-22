@@ -25,10 +25,11 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.next_idx = 0
         self.curr_idx = 0
         self.looped_once = False
+        self.should_stop = False
 
-    def __len__(self):
-        """ Return number of transitions stored so far """
-        return len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
+    #def __len__(self):
+    #    """ Return number of transitions stored so far """
+    #    return len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
 
     def __getitem__(self, idx):
         """ Return a single transition """
@@ -55,12 +56,13 @@ class RLBuffer(torch.utils.data.IterableDataset):
             count += 1
             idx = self.sample_idx()
             yield self[idx]
-            if count == self.update_freq:
+            if self.should_stop or count == self.update_freq:
                 return
                 #raise StopIteration
 
     def sample_idx(self):
-        return random.randint(0, len(self) - 1)
+        num_entries = len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
+        return random.randint(0, num_entries - 1)  # subtract one because randint samples including the upper bound
 
     def add(self, state, action, reward, done, store_episodes=False):
         # Mark episodic boundaries:
@@ -144,48 +146,4 @@ class RLDataModule(pl.LightningDataModule):
 
     def get_test_env(self):
         return self.test_env, self.test_obs
-
-
-
-class MNISTDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir: str = './'):
-        super().__init__()
-        self.data_dir = data_dir
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])
-
-        # self.dims is returned when you call dm.size(). Defined in self.setup()
-        self.dims = None
-
-    def prepare_data(self):
-        # download and preprocess once
-        #MNIST(self.data_dir, train=True, download=True)
-        #MNIST(self.data_dir, train=False, download=True)
-        pass
-
-    def setup(self, stage=None):
-        # Assign train/val datasets for use in dataloaders. Done on every GPU
-        if stage == 'fit' or stage is None:
-            mnist_full = MNIST(self.data_dir, train=True, transform=self.transform)
-            self.train, self.val = random_split(mnist_full, [55000, 5000])
-
-            # Optionally...
-            self.dims = tuple(self.mnist_train[0][0].shape)
-
-        # Assign test dataset for use in dataloader(s)
-        if stage == 'test' or stage is None:
-            self.test = MNIST(self.data_dir, train=False, transform=self.transform)
-
-            # Optionally...
-            self.dims = tuple(self.mnist_test[0][0].shape)
-
-    def train_dataloader(self):
-        return DataLoader(self.train, batch_size=32)
-
-    def val_dataloader(self):
-        return DataLoader(self.val, batch_size=32)
-
-    def test_dataloader(self):
-        return DataLoader(self.test, batch_size=32)
+        #return DataLoader(self.test, batch_size=32)

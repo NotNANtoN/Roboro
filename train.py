@@ -1,9 +1,9 @@
 import time
 from argparse import ArgumentParser
 
-import gym
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import MLFlowLogger
 
 from roboro.agent import Agent
 from roboro.learner import Learner
@@ -15,10 +15,12 @@ def test_agent(agent, env):
     total_return = 0
     while not done:
         action = agent(state)
-        next_state, reward, _ = env.step(action)
+        print("Action: ", action)
+        next_state, reward, done, _ = env.step(action)
         state = next_state
         env.render()
         total_return += reward
+    env.close()
     return total_return
 
 
@@ -50,10 +52,15 @@ else:
         filename='{epoch:02d}-{val_return:.1f}',
         save_top_k=3,
         mode='max')
-    args.max_steps = 1000
+    mlf_logger = MLFlowLogger(
+            experiment_name="default",
+            tracking_uri="file:./ml-runs"
+    )
+    args.max_steps = 200
     args.early_stopping_callback = []
     args.gpus = 0
     args.callbacks = [checkpoint_callback]
+    args.logger = mlf_logger
     trainer = Trainer.from_argparse_args(
             args
     )
@@ -64,9 +71,8 @@ env = learner.train_env
 # Test the agent after training:
 total_return = test_agent(learner, env)
 print("Return of learner: ", total_return)
-#total_return = test_agent(agent, env)
-#print("Return of learner: ", total_return)
 
 # Test agent using internal function:
-total_return = learner.run(env, n_steps=0, n_eps=1) #epsilon = 1.0, store=False)
+total_return = learner.run(env, n_steps=0, n_eps=1, render=True) #epsilon = 1.0, store=False)
+print("Return from internal function: ", sum(total_return))
 

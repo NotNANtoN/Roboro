@@ -1,4 +1,3 @@
-import argparse
 from typing import Tuple, List, Dict, Optional, Any
 
 import numpy as np
@@ -7,12 +6,9 @@ import torch
 import torch.optim as optim
 import gym
 from pytorch_lightning import seed_everything
-from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.optim.optimizer import Optimizer
-from torch.utils.data import DataLoader
 
 from roboro.agent import Agent
-from roboro.env_wrappers import create_env
 from roboro.data import RLDataModule, RLBuffer
 
 
@@ -44,8 +40,8 @@ class Learner(pl.LightningModule):
                  warm_start_size: int = 1000,
                  buffer_size=100000,
                  seed: int = 123,
-                 steps_per_epoch: int = 1000,
-                 frame_stack: int = 4,
+                 steps_per_epoch: int = 100,
+                 frame_stack: int = 0,
                  frameskip: int = 4,
                  grayscale: int = 0,
                  **kwargs):
@@ -69,10 +65,9 @@ class Learner(pl.LightningModule):
 
         # init counters
         self.total_steps = 0
-        self.episode_counter = 0
+        self.total_eps = 0
 
         # tracking params:
-        self.should_stop = False
         # TODO: calc steps per epoch properly
         self.steps_per_epoch = steps_per_epoch
         self.steps_per_train = 1
@@ -82,9 +77,13 @@ class Learner(pl.LightningModule):
         self.batch_size = batch_size
         self.lr = learning_rate
 
-    def forward(self, x: torch.Tensor) -> int:
-        actions = self.agent(x)
-        return actions
+    def on_train_epoch_start(self) -> None:
+        self.buffer.should_stop = False
+
+    def forward(self, obs: torch.Tensor) -> int:
+        obs = obs.to(self.device, self.dtype)
+        action = self.agent(obs).item()
+        return action
 
     def training_step(self, batch, batch_idx):
         """
@@ -104,40 +103,42 @@ class Learner(pl.LightningModule):
         # update buffer
         self.buffer.update(extra_info)
 
-        self.log('steps', self.total_steps, on_step=True, on_epoch=True, prog_bar=True, logger=False)
-        self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        self.log('episodes', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+
         return loss
 
     def validation_step(self, batch, *args, **kwargs):
         if batch is not None:
-            # TODO: do evaluation on random episodes of data
+            # TODO: do evaluation on random episodes of expert data
             pass
 
     def test_step(self, batch, *args, **kwargs):
         if batch is not None:
-            # TODO: do evaluation on random episodes of data
+            # TODO: do evaluation on random episodes of expert data
             pass
 
-    def on_epoch_end(self):#(self, outputs: List[Any]) -> None:
+    def on_train_start(self):
+        self.log('test', 1, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.training_epoch_end([])
+
+    def training_epoch_end(self, outputs: List[Any]) -> None:
         """Evaluate the agent for n episodes"""
-        print("DO EVAL:")
-        # TODO: Now eval is done after every time going through the buffer, not every user-defined epoch
-        #quit()
         if self.val_env is None:
             return
         n = 5
         val_reward_lists = self.run(self.val_env, n_eps=n, epsilon=0)
         assert n == len(val_reward_lists)
         avg_return = sum(val_reward_lists) / n
-        print("AVG return: ", avg_return)
-        self.log('val_return', avg_return, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('val_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def test_epoch_end(self, outputs: List[Any]) -> None:
         """Evaluate the agent for n episodes"""
         if self.test_env is None:
             return
         n = 5
-        test_reward_lists = self.run(self.test_env, n_eps=n, epsilon=0)
+        test_reward_lists = self.run(self.test_env, n_eps=n)
         assert n == len(test_reward_lists)
         avg_return = sum(test_reward_lists) / n
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
@@ -148,7 +149,7 @@ class Learner(pl.LightningModule):
 
     def step(self, obs, env, store=False):
         obs = obs.to(self.device, self.dtype)
-        action = self(obs).item()
+        action = self(obs)
         next_state, r, is_done, _ = env.step(action)
         # add to buffer
         if store:
@@ -162,16 +163,17 @@ class Learner(pl.LightningModule):
             self.train_obs = next_state
             if is_done:
                 self.train_obs = self.train_env.reset()
-                self.episode_counter += 1
+                self.total_eps += 1
             self.total_steps += 1
             if self.total_steps % self.steps_per_epoch == 0:
-                self.should_stop = True
+                #  force buffer to return None in next it
+                self.buffer.should_stop = True
 
     def on_fit_start(self):
         if self.warm_start > 0:
             self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
 
-    def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False) -> List[int]:
+    def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False, render=False) -> List[int]:
         """
         Carries out N episodes of the environment with the current agent
         Args:
@@ -203,6 +205,8 @@ class Learner(pl.LightningModule):
                 steps += 1
             total_rewards.append(episode_reward)
             eps += 1
+            if render:
+                env.render()
 
         self.agent.epsilon = agent_epsilon
 
