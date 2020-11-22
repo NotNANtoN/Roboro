@@ -65,7 +65,7 @@ else:
             args
     )
     trainer.fit(learner)
-    trainer.save_checkpoint("after_training.ckpt")
+    trainer.save_checkpoint("checkpoints/after_training.ckpt")
 # Get train env:
 env = learner.train_env
 # Test the agent after training:

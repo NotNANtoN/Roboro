@@ -1,3 +1,7 @@
+# folders
+checkpoints/
+ml-runs/
+
 # IDEs
 .idea
 
