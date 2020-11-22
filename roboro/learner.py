@@ -130,6 +130,11 @@ class Learner(pl.LightningModule):
         Returns:
             Training loss and log metrics
         """
+        # convert to correct type:
+        from roboro.utils import apply_to_state
+        batch[0] = apply_to_state(lambda x: x.to(self.dtype), batch[0])  # state
+        batch[4] = apply_to_state(lambda x: x.to(self.dtype), batch[4])  # next state
+        # TODO: isn't there a better solution to this?
         # calculates training loss
         loss, extra_info = self.agent.calc_loss(*batch)
         # update target nets, epsilon, etc:

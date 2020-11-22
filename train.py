@@ -1,6 +1,7 @@
 import time
 from argparse import ArgumentParser
 
+import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import MLFlowLogger
@@ -75,7 +76,9 @@ else:
     print("Number of env steps to train on: ", args.steps)
     print("Number of batches to train on: ", args.max_steps)
     args.early_stopping_callback = []
-    args.gpus = 0
+    args.gpus = 1 if torch.cuda.is_available() else 0
+    # TODO: investigate why 16 precision is slower than 32
+    args.precision = 32 # 16 if args.gpus else 32
     args.callbacks = [checkpoint_callback]
     args.logger = mlf_logger
     args.weight_summary = "full"
