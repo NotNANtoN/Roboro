@@ -71,6 +71,7 @@ else:
     print("Number of batches to train on: ", args.max_steps)
     args.early_stopping_callback = []
     args.gpus = 1 if torch.cuda.is_available() else 0
+    # TODO: investigate why 16 precision is slower than 32
     args.precision = 32 # 16 if args.gpus else 32
     args.callbacks = [checkpoint_callback]
     args.logger = mlf_logger
