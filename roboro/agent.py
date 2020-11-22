@@ -31,7 +31,7 @@ class Agent(torch.nn.Module):
         else:
             return Q(obs_shape, act_shape, gamma, **net_kwargs)
 
-    def __init__(self, obs_sample, action_space,
+    def __init__(self, obs_space, action_space,
                  eps_start: float = 0.1,
                  eps_end: float = 0.02,
                  eps_last_frame: int = 150000,
@@ -51,8 +51,10 @@ class Agent(torch.nn.Module):
         self.target_net_polyak_val = target_net_polyak_val
         self.target_net_use_polyak = target_net_use_polyak
         # Get in-out shapes:
+        obs_sample = obs_space.sample()
         obs_shape = obs_sample.shape  #self.get_net_obs_shape(obs_sample)
         self.act_shape = get_act_len(action_space)
+        print("Obs space: ", obs_space)
         print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
         # Create feature extraction network
         # TODO: add normalization into the obs_feature_net application

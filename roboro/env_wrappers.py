@@ -44,6 +44,7 @@ class ToGrayScale(gym.ObservationWrapper):
         super().__init__(env)
         self.dtype = None
         self.mean_dim = None
+        # TODO: manipulate observation space properly
 
     def setup(self, obs):
         assert obs.ndim == 4
@@ -75,7 +76,7 @@ class AtariObsWrapper(gym.ObservationWrapper):
     def __init__(self, env):
         super().__init__(env)
         self.last_obs = None
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1, 80, 80), dtype=env.observation_space.dtype)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(3, 80, 80), dtype=env.observation_space.dtype)
 
     def observation(self, obs):
         obs = obs[35:195]

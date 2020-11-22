@@ -62,7 +62,7 @@ class Learner(pl.LightningModule):
         self.val_env, self.val_obs = self.datamodule.get_val_env()
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
-        self.agent = Agent(self.train_env.observation_space.sample(), self.train_env.action_space)
+        self.agent = Agent(self.train_env.observation_space, self.train_env.action_space)
         print(self.agent)
 
         # init counters
