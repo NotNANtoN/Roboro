@@ -34,8 +34,8 @@ class CNN(torch.nn.Module):
         return int(np.prod(conv_out.shape))
 
     def forward(self, obs):
-        conv_out = self.conv(obs).view(obs.shape[0], -1)
-        return conv_out
+        conv_out = self.conv(obs)
+        return conv_out.view(obs.shape[0], -1)
 
     def get_out_size(self):
         return self.conv_out_size

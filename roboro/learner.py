@@ -59,12 +59,13 @@ class Learner(pl.LightningModule):
                                        frame_stack=frame_stack,
                                        frameskip=frameskip,
                                        grayscale=grayscale,
-                                       norm_record_steps=warm_start_size)
+                                       )
         self.train_env, self.train_obs = self.datamodule.get_train_env()
         self.val_env, self.val_obs = self.datamodule.get_val_env()
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
-        self.agent = Agent(self.train_env.observation_space, self.train_env.action_space)
+        self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
+                           warm_start_steps=warm_start_size)
         print(self.agent)
 
         # init counters
@@ -110,7 +111,7 @@ class Learner(pl.LightningModule):
         if self.train_env is None:
             return
         for _ in range(self.steps_per_train):
-            next_state, action, r, is_done = self.step(self.train_obs, self.train_env, store=True)
+            next_state, action, r, is_done = self.step_agent(self.train_obs, self.train_env, store=True)
             self.train_obs = next_state
             self.epoch_steps += 1 if self.frameskip <= 1 else self.frameskip
             if is_done:
@@ -179,9 +180,8 @@ class Learner(pl.LightningModule):
         avg_return = sum(test_reward_lists) / n
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
-    def step(self, obs, env, store=False):
+    def step_agent(self, obs, env, store=False):
         # send obs to correct device and data type. For frameskipping this also stacks LazyFrame objects into tensors
-        obs = obs.to(self.device, self.dtype)
         action = self(obs)
         next_state, r, is_done, _ = env.step(action)
         # add to buffer
@@ -213,7 +213,7 @@ class Learner(pl.LightningModule):
             is_done = False
             episode_reward = 0
             while not is_done:
-                next_state, action, r, is_done = self.step(episode_state, env, store=store)
+                next_state, action, r, is_done = self.step_agent(episode_state, env, store=store)
                 episode_state = next_state
                 episode_reward += r
                 steps += 1

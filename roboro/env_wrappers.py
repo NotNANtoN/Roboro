@@ -18,7 +18,7 @@ atari_env_names = ['adventure', 'airraid', 'alien', 'amidar', 'assault', 'asteri
               'venture', 'videopinball', 'wizardofwor', 'yars_revenge', 'zaxxon']
 
 
-def create_env(env_name, frameskip, frame_stack, grayscale, norm_record_steps, CustomWrapper=None):
+def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
     # Init train_env:
     env = gym.make(env_name)
 
@@ -31,8 +31,6 @@ def create_env(env_name, frameskip, frame_stack, grayscale, norm_record_steps, C
         env = AtariObsWrapper(env)
     if grayscale:
         env = ToGrayScale(env)
-    # TODO: need to move Standardizer somewhere else, unfortunately. Because some envs have uint8 types before, so no float norm possible
-    #env = Standardize(env, norm_record_steps)
     env = ToTensor(env)
     if frameskip > 1:
         env = FrameSkip(env, skip=frameskip)
@@ -68,45 +66,7 @@ class ToGrayScale(gym.ObservationWrapper):
 
 class ToTensor(gym.ObservationWrapper):
     def observation(self, obs):
-        # maybe np.ascontiguousarray() is needed before getting to torch
-        return torch.from_numpy(obs).unsqueeze(0)
-
-
-class Standardize(gym.ObservationWrapper):
-    def __init__(self, env, record_steps):
-        """Calculate running mean of first record_steps observations using Welford's method and
-        apply z-standardization to observations"""
-        super().__init__(env)
-        self.record_steps = record_steps
-        self.n = 0
-        self.mean = 0
-        self.std = 0
-        self.run_var = 0
-
-    def update_mean(self, obs):
-        if self.mean is None:
-            self.mean = obs.copy()
-            self.run_var = 0
-        else:
-            new_mean = self.mean + (obs - self.mean) / self.n
-            self.run_var = self.run_var + (obs - new_mean) * (obs - self.mean)
-            var = self.run_var / (self.n - 1) if self.n > 1 else 1
-            self.std = np.sqrt(var)
-            self.mean = new_mean
-
-    def observation(self, obs):
-        # Check if we want to update the mean and std
-        if self.n < self.record_steps:
-            self.n += 1
-            self.update_mean(obs)
-        standardized_obs = (obs - self.mean) / self.std
-        if np.isnan(standardized_obs).sum():
-            print(obs)
-            print(standardized_obs)
-            print(self.mean)
-            print(self.std)
-            quit()
-        return standardized_obs
+        return torch.from_numpy(np.ascontiguousarray(obs)).unsqueeze(0)
 
 
 class AtariObsWrapper(gym.ObservationWrapper):

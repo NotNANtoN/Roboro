@@ -1,3 +1,46 @@
+import torch
+
+
+class Standardizer:
+    def __init__(self, record_steps):
+        """Calculate running mean of first record_steps observations using Welford's method and
+        apply z-standardization to observations"""
+        self.record_steps = record_steps
+        self.n = 0
+        self.mean = 0
+        self.std = 0
+        self.run_var = 0
+
+    def observe(self, obs):
+        # Check if we want to update the mean and std
+        if self.n > self.record_steps:
+            return
+        # Update mean and std
+        self.n += 1
+        if self.mean is None:
+            self.mean = obs.copy()
+            self.run_var = 0
+        else:
+            new_mean = self.mean + (obs - self.mean) / self.n
+            self.run_var = self.run_var + (obs - new_mean) * (obs - self.mean)
+            var = self.run_var / (self.n - 1) if self.n > 1 else 1
+            self.std = torch.sqrt(var) if self.n > 1 else 1
+            self.mean = new_mean
+
+    def norm(self, obs):
+        standardized_obs = (obs - self.mean) / self.std
+        # if np.isnan(standardized_obs).sum():
+        #    print(obs)
+        #    print(standardized_obs)
+        #    print(self.mean)
+        #    print(self.std)
+        #    quit()
+        return standardized_obs
+
+    def denorm(self, obs):
+        return (obs * self.std) + self.mean
+
+
 def apply_to_state_list(func, state_list):
     """Apply function to whole list of states (e.g. concatenate, stack etc.)
     Recursively apply this function to nested dicts."""

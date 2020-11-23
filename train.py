@@ -80,11 +80,11 @@ else:
     args.early_stopping_callback = []
     args.gpus = 1 if torch.cuda.is_available() else 0
     # TODO: investigate why 16 precision is slower than 32
-    args.precision = 32 # 16 if args.gpus else 32
+    args.precision = 32  # 16 if args.gpus else 32
     args.callbacks = [checkpoint_callback]
     args.logger = mlf_logger
     args.weight_summary = "full"
-    args.terminate_on_nan = True
+    args.terminate_on_nan = False  # Needs to be False - otherwise this takes up a third of training time!
     trainer = Trainer.from_argparse_args(args)
     trainer.fit(learner)
     trainer.save_checkpoint("checkpoints/after_training.ckpt")

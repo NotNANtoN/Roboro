@@ -6,6 +6,7 @@ import gym
 
 from roboro.policies import Q, QV
 from roboro.networks import CNN, MLP
+from roboro.utils import Standardizer
 
 
 def get_act_len(act_space):
@@ -40,7 +41,8 @@ class Agent(torch.nn.Module):
                  layer_width: int = 256,
                  target_net_hard_steps: int = 200,
                  target_net_polyak_val: float = 0.99,
-                 target_net_use_polyak: bool = True
+                 target_net_use_polyak: bool = True,
+                 warm_start_steps: int = 1000,
                  ):
         super().__init__()
         # Set hyperparams
@@ -57,7 +59,7 @@ class Agent(torch.nn.Module):
         print("Obs space: ", obs_space)
         print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
         # Create feature extraction network
-        # TODO: add normalization into the obs_feature_net application
+        self.normalizer = Standardizer(warm_start_steps)
         self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
@@ -72,20 +74,26 @@ class Agent(torch.nn.Module):
         elif steps % self.target_net_hard_steps == 0:
             self.policy.update_target_nets_hard()
 
+    def extract_features(self, obs):
+        obs = self.normalizer.norm(obs)
+        features = self.obs_feature_net(obs)
+        return features
+
     def forward(self, obs):
         """Receives action preferences by policy and decides based off that"""
+        self.normalizer.observe(obs)  # observe obs and update mean and std
         if random.random() < self.epsilon:
             q_vals = torch.rand(len(obs), self.act_shape)
         else:
-            features = self.obs_feature_net(obs)
+            features = self.extract_features(obs)
             q_vals = self.policy(features)
         actions = torch.argmax(q_vals, dim=1)
         return actions
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         assert done_flags.dtype == torch.bool
-        obs_feats = self.obs_feature_net(obs)
-        next_obs_feats = self.obs_feature_net(next_obs[~done_flags])
+        obs_feats = self.extract_features(obs)
+        next_obs_feats = self.extract_features(next_obs[~done_flags])
         loss = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
         # TODO: incorporate PER weight update in extra_info
         return loss, extra_info
