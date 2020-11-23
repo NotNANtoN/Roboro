@@ -29,6 +29,7 @@ parser = ArgumentParser()
 parser.add_argument('--train_env', type=str, default='CartPole-v0')
 parser.add_argument('--path', type=str)
 parser.add_argument('--steps', type=int, default=10000, help="max env steps")
+parser.add_argument('--frame_stack', type=int, default=0, help="How many frames to sack")
 parser.add_argument('--frameskip', type=int, default=2, help="frameskip")
 parser.add_argument('--steps_per_batch', type=float, default=1, help="how many env steps are taken per training batch")
 
@@ -50,6 +51,7 @@ else:
                       train_env=env_str,
                       frameskip=args.frameskip,
                       steps_per_batch=args.steps_per_batch,
+                      frame_stack=args.frame_stack,
                       )
     agent = learner.agent
     # Do the training!
