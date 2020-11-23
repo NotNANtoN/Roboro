@@ -86,8 +86,9 @@ def main(args: DictConfig):
     # Get train env:
     env = learner.train_env
     # Test agent using internal function:
-    total_return = learner.run(env, n_steps=0, n_eps=10, render=False) #epsilon = 1.0, store=False)
-    print("Return from internal function: ", sum(total_return))
+    # TODO: re-enable rendering once it works on my machine
+    total_return = learner.run(env, n_steps=0, n_eps=10, render=False)
+    print("Return from internal function: ", sum(total_return) / len(total_return))
     # Test the agent after training:
     total_return = test_agent(learner, env)
     print("Return of learner: ", total_return)

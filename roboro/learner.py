@@ -69,11 +69,12 @@ class Learner(pl.LightningModule):
         self.total_steps = 0
         self.total_eps = 0
         self.epoch_steps = 0
+        self.train_step_count = 0  # counter of how many steps
 
         # tracking params:
         # TODO: calc steps by giving percentage at which we want to evaluate
         self.steps_per_epoch = max(steps / 100, 500)
-        self.steps_per_train = steps_per_batch
+        self.steps_per_batch = steps_per_batch
 
         # hyperparams:
         self.warm_start = warm_start_size
@@ -107,7 +108,9 @@ class Learner(pl.LightningModule):
         """ Take some steps in th the env and store them in the replay buffer"""
         if self.train_env is None:
             return
-        for _ in range(self.steps_per_train):
+        self.train_step_count += self.steps_per_batch
+        while self.train_step_count > 1:
+            self.train_step_count -= 1
             next_state, action, r, is_done = self.step_agent(self.train_obs, self.train_env, store=True)
             self.train_obs = next_state
             self.epoch_steps += 1 if self.frameskip <= 1 else self.frameskip
