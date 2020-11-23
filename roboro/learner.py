@@ -1,10 +1,10 @@
 from typing import Tuple, List, Dict, Optional, Any
 
-import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.optim as optim
 from torch.optim.optimizer import Optimizer
+from omegaconf import DictConfig
 
 from roboro.agent import Agent
 from roboro.data import RLDataModule, RLBuffer
@@ -12,13 +12,13 @@ from roboro.data import RLDataModule, RLBuffer
 
 class Learner(pl.LightningModule):
     """
-    PyTorch Lightning Module that contains an Agent and trains it in an train_env
+    PyTorch Lightning Module that contains an Agent and trains it in an env
     
     Example:
         >>> import gym
         >>> from roboro.learner import Learner
         ...
-        >>> learner = Learner(train_env="CartPole-v1")
+        >>> learner = Learner(env="CartPole-v1")
     Train::
         trainer = Trainer()
         trainer.fit(learner, max_steps=10000)
@@ -27,7 +27,7 @@ class Learner(pl.LightningModule):
     """
 
     def __init__(self,
-                 max_steps: int = 100000,
+                 steps: int = 100000,
                  train_env: str = None,
                  train_ds: str = None,
                  val_env: str = None,
@@ -37,17 +37,16 @@ class Learner(pl.LightningModule):
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
                  warm_start_size: int = 1000,
-                 buffer_size=100000,
-                 seed: int = 123,
-                 steps_per_epoch: int = 100,
+                 buffer_size: int =100000,
                  steps_per_batch: int = 1,
                  frame_stack: int = 0,
                  frameskip: int = 2,
                  grayscale: int = 0,
-                 **kwargs):
+                 agent_args: DictConfig = None,
+                 ):
         super().__init__()
         self.save_hyperparameters()
-        # init train_env
+        # init env
         update_freq = 0
         self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
         self.datamodule = RLDataModule(self.buffer,
@@ -63,8 +62,8 @@ class Learner(pl.LightningModule):
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
         self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
-                           warm_start_steps=warm_start_size)
-        print(self.agent)
+                           warm_start_steps=warm_start_size, **agent_args)
+        #print(self.agent)
 
         # init counters
         self.total_steps = 0
@@ -73,7 +72,7 @@ class Learner(pl.LightningModule):
 
         # tracking params:
         # TODO: calc steps by giving percentage at which we want to evaluate
-        self.steps_per_epoch = max(max_steps / 100, 500)
+        self.steps_per_epoch = max(steps / 100, 500)
         self.steps_per_train = steps_per_batch
 
         # hyperparams:
@@ -83,7 +82,7 @@ class Learner(pl.LightningModule):
         self.frameskip = frameskip
 
     def forward(self, obs: torch.Tensor) -> int:
-        obs = obs.to(self.device, self.dtype)
+        obs = obs.to(self.device, self.dtype).unsqueeze(0)
         action = self.agent(obs).item()
         return action
 
@@ -105,7 +104,7 @@ class Learner(pl.LightningModule):
         self.epoch_steps = 0
 
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
-        """ Take some steps in th the train_env and store them in the replay buffer"""
+        """ Take some steps in th the env and store them in the replay buffer"""
         if self.train_env is None:
             return
         for _ in range(self.steps_per_train):
@@ -179,12 +178,11 @@ class Learner(pl.LightningModule):
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def step_agent(self, obs, env, store=False):
-        # send obs to correct device and data type. For frameskipping this also stacks LazyFrame objects into tensors
         action = self(obs)
         next_state, r, is_done, _ = env.step(action)
         # add to buffer
         if store:
-            self.buffer.add(state=obs.squeeze(0), action=action, reward=r, done=is_done)
+            self.buffer.add(state=obs, action=action, reward=r, done=is_done)
         return next_state, action, r, is_done
 
     def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False, render=False) -> List[int]:

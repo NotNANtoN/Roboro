@@ -1,12 +1,13 @@
+import os
 import time
-from argparse import ArgumentParser
 
+import hydra
 import torch
-from pytorch_lightning import Trainer
+from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import MLFlowLogger
+from omegaconf import DictConfig, OmegaConf
 
-from roboro.agent import Agent
 from roboro.learner import Learner
 
 
@@ -24,78 +25,74 @@ def test_agent(agent, env):
     return total_return
 
 
-parser = ArgumentParser()
-# Add PROGRAM level args
-parser.add_argument('--train_env', type=str, default='CartPole-v0')
-parser.add_argument('--path', type=str)
-parser.add_argument('--steps', type=int, default=10000, help="max env steps")
-parser.add_argument('--frame_stack', type=int, default=0, help="How many frames to sack")
-parser.add_argument('--frameskip', type=int, default=2, help="frameskip")
-parser.add_argument('--steps_per_batch', type=float, default=1, help="how many env steps are taken per training batch")
+@hydra.main(config_name="main", config_path="configs")
+def main(args: DictConfig):
+    # Deal with args
+    print("Args:")
+    print(OmegaConf.to_yaml(args))
+    # keep original working directory for mlflow etc
+    os.chdir(hydra.utils.get_original_cwd())
+    learner_args = args.learner
+    trainer_args = args.trainer
+    # Create agent and learner
+    if args.path is not None:
+        # load from checkpoint
+        learner = Learner.load_from_checkpoint(args.path)
+    else:
+        # create from scratch
+        learner = Learner(steps=args.env_steps, agent_args=args.agent, **learner_args)
+        # Do the training!
+        current_time = time.strftime('%d-%h_%H:%M:%S', time.gmtime())
+        checkpoint_callback = ModelCheckpoint(
+            monitor='val_return',
+            dirpath=f'checkpoints/{current_time}',
+            filename='{epoch:02d}-{val_return:.1f}',
+            save_top_k=3,
+            mode='max')
+        mlf_logger = MLFlowLogger(
+                experiment_name="default",
+        )
+        # early_stop_callback = EarlyStopping(
+        #         monitor='steps',
+        #         min_delta=0.00,
+        #         patience=3,
+        #         verbose=False,
+        # )
 
-# Add model specific args
-parser = Agent.add_model_specific_args(parser)
-#parser = Learner.add_model_specific_args(parser)
-# Parse
-args = parser.parse_args()
-# Get env str
-env_str = args.train_env
-# Create agent and learner
-if args.path is not None:
-    # load from checkpoint
-    learner = Learner.load_from_checkpoint(args.path)
-    agent = learner.agent
-else:
-    # create from scratch
-    learner = Learner(max_steps=args.steps,
-                      train_env=env_str,
-                      frameskip=args.frameskip,
-                      steps_per_batch=args.steps_per_batch,
-                      frame_stack=args.frame_stack,
-                      )
-    agent = learner.agent
-    # Do the training!
-    time = time.strftime('%d-%h_%H:%M:%S', time.gmtime())
-    checkpoint_callback = ModelCheckpoint(
-        monitor='val_return',
-        dirpath=f'checkpoints/{time}',
-        filename='{epoch:02d}-{val_return:.1f}',
-        save_top_k=3,
-        mode='max')
-    mlf_logger = MLFlowLogger(
-            experiment_name="default",
-            #tracking_uri="file:./ml-runs"
-    )
-    # early_stop_callback = EarlyStopping(
-    #         monitor='steps',
-    #         min_delta=0.00,
-    #         patience=3,
-    #         verbose=False,
-    # )
-    frameskip = args.frameskip if args.frameskip > 0 else 1
-    max_batches = args.steps / frameskip / args.steps_per_batch
-    args.max_steps = max_batches
-    print("Number of env steps to train on: ", args.steps)
-    print("Number of batches to train on: ", args.max_steps)
-    args.early_stopping_callback = []
-    args.gpus = 1 if torch.cuda.is_available() else 0
-    # TODO: investigate why 16 precision is slower than 32
-    args.precision = 32  # 16 if args.gpus else 32
-    args.callbacks = [checkpoint_callback]
-    args.logger = mlf_logger
-    args.weight_summary = "full"
-    args.terminate_on_nan = False  # Needs to be False - otherwise this takes up a third of training time!
-    trainer = Trainer.from_argparse_args(args)
-    trainer.fit(learner)
-    trainer.save_checkpoint("checkpoints/after_training.ckpt")
-# Send explicitly to correct device:
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-learner.to(device)
-# Get train env:
-env = learner.train_env
-# Test agent using internal function:
-total_return = learner.run(env, n_steps=0, n_eps=1, render=False) #epsilon = 1.0, store=False)
-print("Return from internal function: ", sum(total_return))
-# Test the agent after training:
-total_return = test_agent(learner, env)
-print("Return of learner: ", total_return)
+        # TODO: investigate why 16 precision is slower than 32
+
+        # Apply seed if wanted
+        deterministic = False
+        if args.seed is not None:
+            seed_everything(args.seed)
+            deterministic = True
+        # Calculate number of training batches based off maximal number of env steps
+        frameskip = learner_args.frameskip if learner_args.frameskip > 0 else 1
+        max_batches = args.env_steps / frameskip / learner_args.steps_per_batch
+        print("Number of env steps to train on: ", args.env_steps)
+        print("Number of batches to train on: ",max_batches)
+        trainer = Trainer(max_steps=max_batches,
+                          gpus=1 if torch.cuda.is_available() else 0,
+                          callbacks=[checkpoint_callback],
+                          logger=mlf_logger,
+                          deterministic=deterministic,
+                          **trainer_args,
+                          )
+        trainer.fit(learner)
+        trainer.save_checkpoint("checkpoints/latest.ckpt")
+    # Send explicitly to correct device:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    learner.to(device)
+    # Get train env:
+    env = learner.train_env
+    # Test agent using internal function:
+    total_return = learner.run(env, n_steps=0, n_eps=1, render=False) #epsilon = 1.0, store=False)
+    print("Return from internal function: ", sum(total_return))
+    # Test the agent after training:
+    total_return = test_agent(learner, env)
+    print("Return of learner: ", total_return)
+
+
+if __name__ == "__main__":
+    main()
+

@@ -1,0 +1,41 @@
+defaults:
+  - env:
+  - policy: q
+
+path:
+seed:
+env_steps: 10000
+
+trainer:
+  weights_summary: "full"
+  terminate_on_nan: 0  # Needs to be 0 - otherwise this takes up a third of training time!
+  precision: 32  # 16 if args.gpus else 32
+
+learner:
+  train_env:
+  # env wrappers params
+  frame_stack: 0
+  frameskip: 1
+  grayscale: 0
+  # training params
+  steps_per_batch: 1
+  learning_rate: 0.0003
+  batch_size: 32
+  # size params
+  warm_start_size: 1000
+  buffer_size: 100000
+
+agent:
+  # policy selection
+  qv: 0
+  dueling: 0
+  noisy_layers: 0
+  # learn alg params
+  gamma: 0.99
+  eps_start: 0.1
+  # network params
+  layer_width: 256
+  # target net params
+  target_net_hard_steps: 200
+  target_net_polyak_val: 0.99
+  target_net_use_polyak: 0

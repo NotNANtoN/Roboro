@@ -35,8 +35,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
         next_index = idx + 1
         is_end = self.dones[idx]
         # Stack states:
-        state = self.states[idx]
-        next_state = self.states[next_index] if not is_end else state
+        state = self.states[idx].to("cpu")
+        next_state = self.states[next_index].to("cpu") if not is_end else state
         # Return extra info
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
         extra_info["idx"] = idx
@@ -114,8 +114,13 @@ class RLDataModule(pl.LightningDataModule):
         #if val_ds is not None:
         #    self.val_dl = create_dl(val_ds)
 
+    def collate(self, batch):
+        print(batch)
+        print(len(batch))
+        quit()
+
     def _dataloader(self, ds) -> DataLoader:
-        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=0)
+        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=0)#, collate_fn=self.collate)
 
     def train_dataloader(self) -> DataLoader:
         """Get train loader"""

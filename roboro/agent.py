@@ -19,25 +19,19 @@ class Agent(torch.nn.Module):
     and that calculates a loss based off an experience tuple
     """
     @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--encoder_layers', type=int, default=12)
-        parser.add_argument('--data_path', type=str, default='/some/path')
-        return parser
-
-    @staticmethod
-    def create_policy(obs_shape, act_shape, gamma, use_QV, **net_kwargs):
-        if use_QV:
-            return QV(obs_shape, act_shape, gamma, **net_kwargs)
+    def create_policy(obs_shape, act_shape, gamma, use_qv=False, dueling=False, noisy_layers=False,
+                      **net_kwargs):
+        if use_qv:
+            return QV(obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs)
         else:
-            return Q(obs_shape, act_shape, gamma, **net_kwargs)
+            return Q(obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs)
 
     def __init__(self, obs_space, action_space,
-                 eps_start: float = 0.1,
-                 eps_end: float = 0.02,
-                 eps_last_frame: int = 150000,
-                 gamma: float = 0.99,
                  qv: bool = False,
+                 dueling: bool = False,
+                 noisy_layers: bool = False,
+                 eps_start: float = 0.1,
+                 gamma: float = 0.99,
                  layer_width: int = 256,
                  target_net_hard_steps: int = 200,
                  target_net_polyak_val: float = 0.99,
@@ -54,7 +48,7 @@ class Agent(torch.nn.Module):
         self.target_net_use_polyak = target_net_use_polyak
         # Get in-out shapes:
         obs_sample = obs_space.sample()
-        obs_shape = obs_sample.shape  #self.get_net_obs_shape(obs_sample)
+        obs_shape = obs_sample.shape
         self.act_shape = get_act_len(action_space)
         print("Obs space: ", obs_space)
         print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
@@ -63,7 +57,8 @@ class Agent(torch.nn.Module):
         self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_QV=qv, width=layer_width)
+        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_qv=qv, dueling=dueling,
+                                         noisy_layers=noisy_layers, width=layer_width)
 
     def update_self(self, steps):
         """

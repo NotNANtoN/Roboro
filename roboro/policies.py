@@ -9,11 +9,11 @@ def polyak_update(net, target_net, factor):
 
 
 class Q(torch.nn.Module):
-    def __init__(self, obs_shape, act_shape, gamma, **net_kwargs):
+    def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs):
         super().__init__()
         self.gamma = gamma
-        self.q_net = MLP(obs_shape, act_shape, **net_kwargs)
-        self.q_net_target = MLP(obs_shape, act_shape, **net_kwargs)
+        self.q_net = MLP(obs_shape, act_shape, dueling=dueling, noisy=noisy_layers, **net_kwargs)
+        self.q_net_target = MLP(obs_shape, act_shape, dueling=dueling, noisy=noisy_layers, **net_kwargs)
 
     def forward(self, obs):
         q_vals = self.q_net(obs)
@@ -61,11 +61,11 @@ class Q(torch.nn.Module):
 
 class QV(Q):
     """Train an additional state value network and train the q_net using it"""
-    def __init__(self, obs_shape, act_shape, gamma, **net_kwargs):
-        super().__init__(obs_shape, act_shape, gamma)
+    def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs):
+        super().__init__(obs_shape, act_shape, gamma, dueling, noisy_layers)
         v_out_size = 1
-        self.v_net = MLP(obs_shape, v_out_size, **net_kwargs)
-        self.v_net_target = MLP(obs_shape, v_out_size, **net_kwargs)
+        self.v_net = MLP(obs_shape, v_out_size, dueling=dueling, noisy=noisy_layers, **net_kwargs)
+        self.v_net_target = MLP(obs_shape, v_out_size, dueling=dueling, noisy=noisy_layers, **net_kwargs)
 
     @torch.no_grad()
     def calc_next_obs_v_vals(self, non_final_next_obs, done_flags, net):
