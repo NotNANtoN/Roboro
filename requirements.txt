@@ -1,0 +1,4 @@
+gym
+torch >= 1.6.0
+pytorch_lightning >= 1.0.0
+mlflow
