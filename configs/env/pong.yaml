@@ -1,6 +1,6 @@
 # @package _global_
 
-env_steps: 100000
+env_steps: 1000000
 
 learner:
   train_env: PongNoFrameskip-v4
