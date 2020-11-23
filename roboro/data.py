@@ -5,8 +5,6 @@ import pytorch_lightning as pl
 import torch
 import numpy as np
 from torch.utils.data import random_split, DataLoader
-from torchvision.datasets import MNIST
-from torchvision import transforms
 
 from roboro.env_wrappers import create_env
 

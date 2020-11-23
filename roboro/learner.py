@@ -4,8 +4,6 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.optim as optim
-import gym
-from pytorch_lightning import seed_everything
 from torch.optim.optimizer import Optimizer
 
 from roboro.agent import Agent
@@ -124,14 +122,14 @@ class Learner(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         """
         Carries out a single step through the environment to update the replay buffer.
-        Then calculates loss based on the minibatch recieved
+        Then calculates loss based on the minibatch received
         Args:
             batch: current mini batch of replay data
             batch_idx: idx of mini batch - not needed
         Returns:
             Training loss and log metrics
         """
-        # convert to correct type:
+        # convert to correct type (for half precision compatibility):
         from roboro.utils import apply_to_state
         batch[0] = apply_to_state(lambda x: x.to(self.dtype), batch[0])  # state
         batch[4] = apply_to_state(lambda x: x.to(self.dtype), batch[4])  # next state

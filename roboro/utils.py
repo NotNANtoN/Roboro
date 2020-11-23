@@ -1,15 +1,16 @@
 import torch
 
 
-class Standardizer:
+class Standardizer(torch.nn.Module):
     def __init__(self, record_steps):
         """Calculate running mean of first record_steps observations using Welford's method and
         apply z-standardization to observations"""
+        super().__init__()
         self.record_steps = record_steps
-        self.n = 0
-        self.mean = 0
-        self.std = 0
-        self.run_var = 0
+        self.register_buffer("mean", torch.tensor(0))
+        self.register_buffer("std", torch.tensor(0))
+        self.register_buffer("run_var", torch.tensor(0))
+        self.register_buffer("n", torch.tensor(0))
 
     def observe(self, obs):
         # Check if we want to update the mean and std
@@ -19,12 +20,12 @@ class Standardizer:
         self.n += 1
         if self.mean is None:
             self.mean = obs.copy()
-            self.run_var = 0
+            self.run_var = torch.tensor(0)
         else:
             new_mean = self.mean + (obs - self.mean) / self.n
             self.run_var = self.run_var + (obs - new_mean) * (obs - self.mean)
-            var = self.run_var / (self.n - 1) if self.n > 1 else 1
-            self.std = torch.sqrt(var) if self.n > 1 else 1
+            var = self.run_var / (self.n - 1) if self.n > 1 else torch.tensor(1)
+            self.std = torch.sqrt(var) if self.n > 1 else torch.tensor(1)
             self.mean = new_mean
 
     def norm(self, obs):
