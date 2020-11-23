@@ -1,0 +1,8 @@
+# @package _global_
+
+env_steps: 10000
+
+learner:
+  frame_stack: 0
+  frameskip: 0
+  train_env: CartPole-v1
