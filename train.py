@@ -11,13 +11,13 @@ from roboro.learner import Learner
 
 
 def test_agent(agent, env):
-    state = env.reset()
+    obs = env.reset()
     done = False
     total_return = 0
     while not done:
-        action = agent(state)
-        next_state, reward, done, _ = env.step(action)
-        state = next_state
+        action = agent(obs)
+        next_obs, reward, done, _ = env.step(action)
+        obs = next_obs
         #env.render()
         total_return += reward
     env.close()
@@ -88,13 +88,14 @@ else:
     trainer = Trainer.from_argparse_args(args)
     trainer.fit(learner)
     trainer.save_checkpoint("checkpoints/after_training.ckpt")
+# Send explicitly to correct device:
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+learner.to(device)
 # Get train env:
 env = learner.train_env
-# Test the agent after training:
-total_return = test_agent(learner, env)
-print("Return of learner: ", total_return)
-
 # Test agent using internal function:
 total_return = learner.run(env, n_steps=0, n_eps=1, render=False) #epsilon = 1.0, store=False)
 print("Return from internal function: ", sum(total_return))
-
+# Test the agent after training:
+total_return = test_agent(learner, env)
+print("Return of learner: ", total_return)
