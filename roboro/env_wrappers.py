@@ -19,7 +19,7 @@ atari_env_names = ['adventure', 'airraid', 'alien', 'amidar', 'assault', 'asteri
 
 
 def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
-    # Init train_env:
+    # Init env:
     env = gym.make(env_name)
 
     # TODO: might want to add a sticky action wrapper!
@@ -35,7 +35,7 @@ def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
     if frameskip > 1:
         env = FrameSkip(env, skip=frameskip)
     if frame_stack > 1:
-        env = FrameStack(env, frame_stack, stack_dim=0)
+        env = FrameStack(env, frame_stack)
     obs = env.reset()
     return env, obs
 
@@ -45,28 +45,40 @@ class ToGrayScale(gym.ObservationWrapper):
         super().__init__(env)
         self.dtype = None
         self.mean_dim = None
-        # TODO: manipulate observation space properly
 
-    def setup(self, obs):
-        assert obs.ndim == 4
-        self.dtype = obs.dtype
-        if obs.shape[1] == 3:
-            self.mean_dim = 1
-        elif obs.shape[-1] == 3:
+        self.setup(env.observation_space)
+        if isinstance(env.observation_space, dict):
+            new_space = apply_rec_to_dict(self.transform_obs_space, env.observation_space)
+            self.observation_space = dict(new_space)
+        else:
+            self.observation_space = self.transform_obs_space(self.observation_space)
+
+    def transform_obs_space(self, obs_space):
+        shp = list(obs_space.shape)
+        shp[self.mean_dim] = 1
+        obs_space = gym.spaces.Box(shape=shp, dtype=obs_space.dtype, low=0, high=1)
+        return obs_space
+
+    def setup(self, obs_space):
+        """Select dimension over which to take the mean"""
+        obs_shape = obs_space.shape
+        assert len(obs_shape) == 3
+        self.dtype = obs_space.dtype
+        if obs_shape[0] == 3:
+            self.mean_dim = 0
+        elif obs_shape[-1] == 3:
             self.mean_dim = -1
         else:
             raise ValueError("Observation is not an RGB image!")
 
     def observation(self, obs):
-        if self.mean_dim is None:
-            self.setup(obs)
         obs = np.expand_dims(obs.mean(axis=self.mean_dim).astype(self.dtype), axis=0)
         return obs
 
 
 class ToTensor(gym.ObservationWrapper):
     def observation(self, obs):
-        return torch.from_numpy(np.ascontiguousarray(obs)).unsqueeze(0)
+        return torch.from_numpy(np.ascontiguousarray(obs))
 
 
 class AtariObsWrapper(gym.ObservationWrapper):
@@ -114,7 +126,7 @@ class FrameSkip(gym.Wrapper):
 
 
 class FrameStack(gym.Wrapper):
-    def __init__(self, env, k, stack_dim=0):
+    def __init__(self, env, k):
         """Stack k last frames.
         Returns lazy array, which is much more memory efficient.
         See Also
@@ -124,7 +136,6 @@ class FrameStack(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         self.k = k
         self.frames = deque([], maxlen=k)
-        self.stack_dim = stack_dim
 
         if isinstance(env.observation_space, dict):
             new_space = apply_rec_to_dict(self.transform_obs_space, env.observation_space)
@@ -132,16 +143,10 @@ class FrameStack(gym.Wrapper):
         else:
             self.observation_space = self.transform_obs_space(self.observation_space)
 
-        # The first dim of an incoming obs is the batch_size, don't stack it:
-        self.stack_dim += 1
-
     def transform_obs_space(self, obs_space):
-        shp = obs_space.shape
-        stack_dim = self.stack_dim
-        if stack_dim == -1:
-            stack_dim = len(shp) - 1
-        shp = [size * self.k if idx == stack_dim else size for idx, size in enumerate(shp)]
-        obs_space = gym.spaces.Box(low=0, high=255, shape=shp, dtype=obs_space.dtype)
+        shp = list(obs_space.shape)
+        shp[0] = shp[0] * self.k
+        obs_space = gym.spaces.Box(low=0, high=1, shape=shp, dtype=obs_space.dtype)
         return obs_space
 
     def reset(self):
@@ -157,20 +162,19 @@ class FrameStack(gym.Wrapper):
 
     def _get_ob(self):
         assert len(self.frames) == self.k
-        return LazyFrames(tuple(self.frames), self.stack_dim)
+        return LazyFrames(tuple(self.frames))
 
 
 class LazyFrames:
-    def __init__(self, frames, stack_dim):
+    def __init__(self, frames):
         """This object ensures that common frames between the observations are only stored once.
         It exists purely to optimize memory usage which can be huge for DQN's 1M frames replay
         buffers.
-        This object should only be converted to numpy array before being passed to the model.
+        This object should only be converted to torch tensor before being passed to the model.
         You'd not believe how complex the previous solution was."""
         self._frames = frames
         self._out = None
         self.obs_is_dict = isinstance(self._frames[0], dict)
-        self.stack_dim = stack_dim
 
     def get_stacked_frames(self):
         return self.stack_frames(self._frames)
@@ -180,7 +184,7 @@ class LazyFrames:
         return obs
 
     def stack(self, frames):
-        return torch.cat(list(frames), dim=self.stack_dim)
+        return torch.cat(list(frames), dim=0)
 
     def make_state(self):
         return self.get_stacked_frames()
