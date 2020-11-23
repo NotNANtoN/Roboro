@@ -72,7 +72,10 @@ class ToGrayScale(gym.ObservationWrapper):
             raise ValueError("Observation is not an RGB image!")
 
     def observation(self, obs):
-        obs = np.expand_dims(obs.mean(axis=self.mean_dim).astype(self.dtype), axis=0)
+        obs = obs.mean(axis=self.mean_dim)
+        if self.dtype == np.uint8:
+            obs = np.round(obs)
+        obs = np.expand_dims(obs.astype(self.dtype), axis=0)
         return obs
 
 
