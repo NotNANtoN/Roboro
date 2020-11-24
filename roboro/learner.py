@@ -69,7 +69,7 @@ class Learner(pl.LightningModule):
         self.total_steps = 0
         self.total_eps = 0
         self.epoch_steps = 0
-        self.train_step_count = 0  # counter of how many steps
+        self.train_step_count = 0  # number of env steps to do this batch - gets incremented by steps_per_batch every batch
 
         # tracking params:
         # TODO: calc steps by giving percentage at which we want to evaluate
@@ -80,7 +80,7 @@ class Learner(pl.LightningModule):
         self.warm_start = warm_start_size
         self.batch_size = batch_size
         self.lr = learning_rate
-        self.frameskip = frameskip
+        self.frameskip = frameskip  # need to store here to keep track of real number of env interactions
 
     def forward(self, obs: torch.Tensor) -> int:
         obs = obs.to(self.device, self.dtype).unsqueeze(0)

@@ -36,6 +36,7 @@ agent:
   # network params
   layer_width: 256
   # target net params
-  target_net_hard_steps: 200
+  target_net_use_polyak: 1
+  target_net_hard_steps: 2000
   target_net_polyak_val: 0.99
-  target_net_use_polyak: 0
+
