@@ -53,6 +53,7 @@ class Learner(pl.LightningModule):
                                        train_env, train_ds,
                                        val_env, val_ds,
                                        test_env, test_ds,
+                                       batch_size=batch_size,
                                        frame_stack=frame_stack,
                                        frameskip=frameskip,
                                        grayscale=grayscale,
