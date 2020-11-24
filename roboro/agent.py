@@ -33,7 +33,7 @@ class Agent(torch.nn.Module):
                  eps_start: float = 0.1,
                  gamma: float = 0.99,
                  layer_width: int = 256,
-                 target_net_hard_steps: int = 200,
+                 target_net_hard_steps: int = 1000,
                  target_net_polyak_val: float = 0.99,
                  target_net_use_polyak: bool = True,
                  warm_start_steps: int = 1000,

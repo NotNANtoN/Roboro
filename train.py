@@ -12,6 +12,7 @@ from roboro.learner import Learner
 
 
 def test_agent(agent, env):
+    """Test agent using normal gym style outside of learner"""
     obs = env.reset()
     done = False
     total_return = 0
@@ -88,11 +89,10 @@ def main(args: DictConfig):
     # Test agent using internal function:
     # TODO: re-enable rendering once it works on my machine
     total_return = learner.run(env, n_steps=0, n_eps=10, render=False)
-    print("Return from internal function: ", sum(total_return) / len(total_return))
+    print("Avg return from internal run function: ", sum(total_return) / len(total_return))
     # Test the agent after training:
     total_return = test_agent(learner, env)
     print("Return of learner: ", total_return)
-    
     # TODO: investigate embeddings of feature net of agent by applying UMAP and coloring by value!
 
 

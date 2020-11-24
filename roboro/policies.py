@@ -23,8 +23,8 @@ class Q(torch.nn.Module):
 
     def forward(self, obs):
         q_vals = self.q_net(obs)
-        action_preferences = torch.softmax(q_vals, dim=1)
-        return action_preferences
+        #action_preferences = torch.softmax(q_vals, dim=1)
+        return q_vals
 
     @torch.no_grad()
     def calc_next_obs_q_vals(self, non_final_next_obs, done_flags, net):
