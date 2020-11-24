@@ -92,6 +92,8 @@ def main(args: DictConfig):
     # Test the agent after training:
     total_return = test_agent(learner, env)
     print("Return of learner: ", total_return)
+    
+    # TODO: investigate embeddings of feature net of agent by applying UMAP and coloring by value!
 
 
 if __name__ == "__main__":

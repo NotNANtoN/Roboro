@@ -24,6 +24,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.curr_idx = 0
         self.looped_once = False
         self.should_stop = False
+        
+        # TODO: add n-step replay buffer by summing reward of future steps to current reward
 
     #def __len__(self):
     #    """ Return number of transitions stored so far """
