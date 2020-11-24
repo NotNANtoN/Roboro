@@ -12,6 +12,7 @@ def freeze_params(module: torch.nn.Module):
     for param in module.parameters():
         param.requires_grad = False
 
+
 class Q(torch.nn.Module):
     def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs):
         super().__init__()

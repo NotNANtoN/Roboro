@@ -74,7 +74,7 @@ class Learner(pl.LightningModule):
 
         # tracking params:
         # TODO: calc steps by giving percentage at which we want to evaluate
-        self.steps_per_epoch = max(steps / 100, 500)
+        self.steps_per_epoch = min(max(steps / 100, 500), 20000)
         self.steps_per_batch = steps_per_batch
 
         # hyperparams:
