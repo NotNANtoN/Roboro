@@ -125,6 +125,19 @@ class QV(torch.nn.Module):
     def update_target_nets_soft(self, val):
         self.v.update_target_nets_soft(val)
         self.q.update_target_nets_soft(val)
+        
+
+class QVMax(QV):
+    """QVMax is an off-policy variant of QV. The V-net is trained by using the Q-net and vice versa."""
+    def calc_loss(self, obs, actions, rewards, done_flags, non_final_next_obs, extra_info):
+        q_target = self.q.calc_target_val(rewards, done_flags, non_final_next_obs)
+        v_target = self.v.calc_target_val(rewards, done_flags, non_final_next_obs)
+        loss_args = (obs, actions, rewards, done_flags, non_final_next_obs, extra_info)
+        v_loss = self.v.calc_loss(*loss_args, targets=q_target)
+        q_loss = self.q.calc_loss(*loss_args, targets=v_target)
+        loss = (v_loss + q_loss).mean()
+        return loss
+
 
 
 class Ensemble(torch.nn.Module):

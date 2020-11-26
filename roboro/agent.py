@@ -4,7 +4,7 @@ import random
 import torch
 import gym
 
-from roboro.policies import Q, QV
+from roboro.policies import Q, QV, QVMax
 from roboro.networks import CNN, MLP
 from roboro.utils import Standardizer
 
@@ -19,15 +19,19 @@ class Agent(torch.nn.Module):
     and that calculates a loss based off an experience tuple
     """
     @staticmethod
-    def create_policy(obs_shape, act_shape, gamma, use_qv=False, dueling=False, noisy_layers=False,
+    def create_policy(obs_shape, act_shape, gamma, use_qv=False, use_qvmax=False, dueling=False, noisy_layers=False,
                       **net_kwargs):
+        policy_args = (obs_shape, act_shape, gamma, dueling, noisy_layers)
         if use_qv:
-            return QV(obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs)
+            return QV(*policy_args, **net_kwargs)
+        elif use_qvmax:
+            return QVMax(*policy_args, **net_kwargs)
         else:
-            return Q(obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs)
+            return Q(*policy_args, **net_kwargs)
 
     def __init__(self, obs_space, action_space,
                  qv: bool = False,
+                 qvmax: bool = False,
                  dueling: bool = False,
                  noisy_layers: bool = False,
                  eps_start: float = 0.1,
@@ -57,7 +61,7 @@ class Agent(torch.nn.Module):
         self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_qv=qv, dueling=dueling,
+        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_qv=qv, use_qvmax=qvmax, dueling=dueling,
                                          noisy_layers=noisy_layers, width=layer_width)
 
     def update_self(self, steps):

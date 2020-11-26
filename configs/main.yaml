@@ -28,6 +28,7 @@ learner:
 agent:
   # policy selection
   qv: 0
+  qvmax: 0
   dueling: 0
   noisy_layers: 0
   # learn alg params
