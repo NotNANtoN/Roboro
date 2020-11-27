@@ -1,0 +1,8 @@
+# @package _global_
+
+agent:
+  iqn: 1
+  policy:
+    munchausen: 0
+    tau: 0.001
+    num_quantiles: 8

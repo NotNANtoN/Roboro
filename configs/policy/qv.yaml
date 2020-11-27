@@ -2,3 +2,5 @@
 
 agent:
   qv: 1
+  policy:
+    double_q: 0

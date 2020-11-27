@@ -3,8 +3,9 @@ import random
 
 import torch
 import gym
+from omegaconf import DictConfig
 
-from roboro.policies import Q, QV, QVMax
+from roboro.policies import Q, QV, QVMax, IQN
 from roboro.networks import CNN, MLP
 from roboro.utils import Standardizer
 
@@ -19,29 +20,27 @@ class Agent(torch.nn.Module):
     and that calculates a loss based off an experience tuple
     """
     @staticmethod
-    def create_policy(obs_shape, act_shape, gamma, use_qv=False, use_qvmax=False, dueling=False, noisy_layers=False, double_q=False,
-                      **net_kwargs):
-        policy_args = (obs_shape, act_shape, gamma, dueling, noisy_layers, double_q)
-        if use_qv:
-            return QV(*policy_args, **net_kwargs)
+    def create_policy(obs_size, act_size, policy_args, use_qv=False, use_qvmax=False, iqn=False):
+        if iqn:
+            return IQN(obs_size, act_size, **policy_args)
+        elif use_qv:
+            return QV(obs_size, act_size, **policy_args)
         elif use_qvmax:
-            return QVMax(*policy_args, **net_kwargs)
+            return QVMax(obs_size, act_size, **policy_args)
         else:
-            return Q(*policy_args, **net_kwargs)
+            return Q(obs_size, act_size, **policy_args)
 
     def __init__(self, obs_space, action_space,
                  qv: bool = False,
                  qvmax: bool = False,
-                 double_q: bool = False,
-                 dueling: bool = False,
-                 noisy_layers: bool = False,
+                 iqn: bool = False,
                  eps_start: float = 0.1,
-                 gamma: float = 0.99,
-                 layer_width: int = 256,
                  target_net_hard_steps: int = 1000,
                  target_net_polyak_val: float = 0.99,
                  target_net_use_polyak: bool = True,
                  warm_start_steps: int = 1000,
+                 feat_layer_width: int = 256,
+                 policy: DictConfig = None,
                  ):
         super().__init__()
         # Set hyperparams
@@ -59,11 +58,12 @@ class Agent(torch.nn.Module):
         print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
         # Create feature extraction network
         self.normalizer = Standardizer(warm_start_steps)
-        self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
+        self.obs_feature_net = CNN(obs_shape, feat_layer_width) if len(obs_shape) == 3\
+            else MLP(obs_shape[0], feat_layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_qv=qv, use_qvmax=qvmax, dueling=dueling, double_q=double_q,
-                                         noisy_layers=noisy_layers, width=layer_width)
+        self.policy = self.create_policy(obs_feature_shape, self.act_shape, use_qv=qv, use_qvmax=qvmax, iqn=iqn,
+                                         policy_args=policy)
 
     def update_self(self, steps):
         """
@@ -93,7 +93,7 @@ class Agent(torch.nn.Module):
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         assert done_flags.dtype == torch.bool
         obs_feats = self.extract_features(obs)
-        next_obs_feats = self.extract_features(next_obs[~done_flags])
+        next_obs_feats = self.extract_features(next_obs)
         loss = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
         # TODO: incorporate PER weight update in extra_info
         return loss, extra_info

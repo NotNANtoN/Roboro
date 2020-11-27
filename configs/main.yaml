@@ -29,18 +29,21 @@ agent:
   # policy selection
   qv: 0
   qvmax: 0
-  double_q: 0
-  dueling: 0
-  noisy_layers: 0
+  iqn: 0
   # learn alg params
-  gamma: 0.99
   eps_start: 0.1
-  # network params
-  layer_width: 256
+  # feature extraction net params
+  feat_layer_width: 256
   # target net params
   target_net_use_polyak: 1
   target_net_hard_steps: 2000
   target_net_polyak_val: 0.99
+  policy:
+    gamma: 0.99
+    net:
+      dueling: 0
+      noisy_layers: 0
+      width: 256
   
   
 # To read the modified CLI args and set the MLflow run_name according to it:

@@ -1,6 +1,11 @@
 import torch
 
 
+def weight_init(layers):
+    for layer in layers:
+        torch.nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
+
+
 class Standardizer(torch.nn.Module):
     def __init__(self, record_steps):
         """Calculate running mean of first record_steps observations using Welford's method and

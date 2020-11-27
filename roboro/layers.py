@@ -1,6 +1,8 @@
 import math
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 def create_block(in_size, out_size, width=512, noisy_linear=False):
