@@ -37,7 +37,7 @@ class Learner(pl.LightningModule):
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
                  warm_start_size: int = 1000,
-                 buffer_size: int =100000,
+                 buffer_size: int = 100000,
                  steps_per_batch: int = 1,
                  frame_stack: int = 0,
                  frameskip: int = 2,

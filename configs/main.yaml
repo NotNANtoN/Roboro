@@ -41,4 +41,15 @@ agent:
   target_net_use_polyak: 1
   target_net_hard_steps: 2000
   target_net_polyak_val: 0.99
+  
+  
+# To read the modified CLI args and set the MLflow run_name according to it:
+override_args: ${hydra:job.override_dirname}
 
+# Optionally exclude some keys from the run_name:
+hydra:
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - seed

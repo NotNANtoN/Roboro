@@ -2,6 +2,7 @@ import os
 import time
 
 import hydra
+import mlflow
 import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -50,9 +51,12 @@ def main(args: DictConfig):
             filename='{epoch:02d}-{val_return:.1f}',
             save_top_k=3,
             mode='max')
-        mlf_logger = MLFlowLogger(
-                experiment_name="default",
-        )
+        # Set up mlflowlogger
+        mlf_logger = MLFlowLogger()
+        # Create a run manually and assign the MlFlowLogger to it to specify run_name ourselves
+        run = mlflow.start_run(experiment_id=0, run_name=args.override_args)
+        mlf_logger._run_id = run.info.run_id
+        mlf_logger._experiment_id = run.info.experiment_id
         # early_stop_callback = EarlyStopping(
         #         monitor='steps',
         #         min_delta=0.00,
