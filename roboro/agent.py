@@ -19,9 +19,9 @@ class Agent(torch.nn.Module):
     and that calculates a loss based off an experience tuple
     """
     @staticmethod
-    def create_policy(obs_shape, act_shape, gamma, use_qv=False, use_qvmax=False, dueling=False, noisy_layers=False,
+    def create_policy(obs_shape, act_shape, gamma, use_qv=False, use_qvmax=False, dueling=False, noisy_layers=False, double_q=False,
                       **net_kwargs):
-        policy_args = (obs_shape, act_shape, gamma, dueling, noisy_layers)
+        policy_args = (obs_shape, act_shape, gamma, dueling, noisy_layers, double_q)
         if use_qv:
             return QV(*policy_args, **net_kwargs)
         elif use_qvmax:
@@ -32,6 +32,7 @@ class Agent(torch.nn.Module):
     def __init__(self, obs_space, action_space,
                  qv: bool = False,
                  qvmax: bool = False,
+                 double_q: bool = False,
                  dueling: bool = False,
                  noisy_layers: bool = False,
                  eps_start: float = 0.1,
@@ -61,7 +62,7 @@ class Agent(torch.nn.Module):
         self.obs_feature_net = CNN(obs_shape) if len(obs_shape) == 3 else MLP(obs_shape[0], layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_qv=qv, use_qvmax=qvmax, dueling=dueling,
+        self.policy = self.create_policy(obs_feature_shape, self.act_shape, gamma, use_qv=qv, use_qvmax=qvmax, dueling=dueling, double_q=double_q,
                                          noisy_layers=noisy_layers, width=layer_width)
 
     def update_self(self, steps):

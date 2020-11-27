@@ -16,26 +16,44 @@ def freeze_params(module: torch.nn.Module):
 
 
 class Q(torch.nn.Module):
-    def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs):
+    def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, double_q, **net_kwargs):
         super().__init__()
         self.gamma = gamma
         self.q_net = MLP(obs_shape, act_shape, dueling=dueling, noisy=noisy_layers, **net_kwargs)
         self.q_net_target = MLP(obs_shape, act_shape, dueling=dueling, noisy=noisy_layers, **net_kwargs)
         freeze_params(self.q_net_target)
+        # Decide on using double Q-learning by choosing which method to use to calc next state value:
+        if double_q:
+            self._next_state_func = self._calc_next_obs_q_vals_double_Q
+        else:
+            self._next_state_func = self._calc_next_obs_q_vals
 
     def forward(self, obs):
         return self.q_net(obs)
 
     @torch.no_grad()
-    def _calc_next_obs_q_vals(self, non_final_next_obs, done_flags, net):
-        """If a done_flag is set the next obs val is 0, else calculate it"""
+    def _calc_next_obs_q_vals(self, non_final_next_obs, done_flags):
+        """Calculate the value of the next state via the target network.
+        If a done_flag is set the next obs val is 0, else calculate it"""
         q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
-        non_final_q_vals = net(non_final_next_obs)
+        non_final_q_vals = self.q_net_target(non_final_next_obs)
         q_vals_next[~done_flags] = torch.max(non_final_q_vals, dim=1)[0]
+        return q_vals_next
+        
+    @torch.no_grad()
+    def _calc_next_obs_q_vals_double_Q(self, non_final_next_obs, done_flags):
+        """Calculate the value of the next state according to the double Q learning rule.
+        It decouples the action selection (done via online network) and the action evaluation (done via target network)."""
+        q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
+        non_final_q_vals_target_net = self.q_net_target(non_final_next_obs)
+        non_final_q_vals_online_net = self.q_net(non_final_next_obs)
+        max_idcs = torch.max(non_final_q_vals_online_net, dim=1)[1]
+        max_target_vals = non_final_q_vals_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
+        q_vals_next[~done_flags] = max_target_vals
         return q_vals_next
 
     def calc_target_val(self, rewards, done_flags, non_final_next_obs):
-        q_vals_next = self._calc_next_obs_q_vals(non_final_next_obs, done_flags, self.q_net_target)
+        q_vals_next = self._next_state_func(non_final_next_obs, done_flags)
         assert q_vals_next.shape == rewards.shape
         targets = rewards + self.gamma * q_vals_next
         return targets
@@ -62,26 +80,26 @@ class Q(torch.nn.Module):
 
 class V(torch.nn.Module):
     """A state value network"""
-    def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, **net_kwargs):
+    def __init__(self, obs_shape, act_shape, gamma, dueling, noisy_layers, double_q, **net_kwargs):
         super().__init__()
         self.gamma = gamma
         v_out_size = 1
-        self.v_net = MLP(obs_shape, v_out_size, dueling=dueling, noisy=noisy_layers, **net_kwargs)
-        self.v_net_target = MLP(obs_shape, v_out_size, dueling=dueling, noisy=noisy_layers, **net_kwargs)
+        self.v_net = MLP(obs_shape, v_out_size, noisy=noisy_layers, **net_kwargs)
+        self.v_net_target = MLP(obs_shape, v_out_size, noisy=noisy_layers, **net_kwargs)
         freeze_params(self.v_net_target)
         
     def forward(self, obs):
         return self.v_net(obs)
 
     @torch.no_grad()
-    def _calc_next_obs_vals(self, non_final_next_obs, done_flags, net):
+    def _calc_next_obs_vals(self, non_final_next_obs, done_flags):
         """If a done_flag is set the next obs val is 0, else calculate it"""
         v_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
-        v_vals_next[~done_flags] = net(non_final_next_obs).squeeze(1)
+        v_vals_next[~done_flags] = self.v_net_target(non_final_next_obs).squeeze(1)
         return v_vals_next
 
     def calc_target_val(self, rewards, done_flags, next_obs):
-        v_vals_next = self._calc_next_obs_vals(next_obs, done_flags, self.v_net_target)
+        v_vals_next = self._calc_next_obs_vals(next_obs, done_flags)
         targets = rewards + self.gamma * v_vals_next
         return targets
 

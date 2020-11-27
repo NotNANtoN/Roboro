@@ -1,5 +1,5 @@
 defaults:
-  - env: ???
+  - env:
   - policy: q
 
 path:
@@ -7,7 +7,7 @@ seed:
 env_steps: 10000
 
 trainer:
-  weights_summary: "full"
+#  weights_summary: "full"
   terminate_on_nan: 0  # Needs to be 0 - otherwise this takes up a third of training time!
   precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
 
@@ -29,6 +29,7 @@ agent:
   # policy selection
   qv: 0
   qvmax: 0
+  double_q: 0
   dueling: 0
   noisy_layers: 0
   # learn alg params
