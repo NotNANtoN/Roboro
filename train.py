@@ -52,11 +52,8 @@ def main(args: DictConfig):
             save_top_k=3,
             mode='max')
         # Set up mlflowlogger
-        mlf_logger = MLFlowLogger()
-        # Create a run manually and assign the MlFlowLogger to it to specify run_name ourselves
-        run = mlflow.start_run(experiment_id=0, run_name=args.override_args)
-        mlf_logger._run_id = run.info.run_id
-        mlf_logger._experiment_id = run.info.experiment_id
+        mlf_logger = MLFlowLogger(experiment_name="Default", tags={"mlflow.runName": args.override_args})
+
         # early_stop_callback = EarlyStopping(
         #         monitor='steps',
         #         min_delta=0.00,
