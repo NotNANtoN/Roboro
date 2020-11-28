@@ -47,22 +47,19 @@ class Q(torch.nn.Module):
     def _calc_next_obs_q_vals(self, next_obs, done_flags):
         """Calculate the value of the next state via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
-        q_vals_next = self.q_net_target(next_obs) * (~done_flags)
-        #q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
-        #non_final_q_vals = self.q_net_target(non_final_next_obs)
-        #q_vals_next[~done_flags] = torch.max(non_final_q_vals, dim=1)[0]
+        q_vals_next = self.q_net_target(next_obs) * (~done_flags.unsqueeze(-1))
+        q_vals_next = torch.max(q_vals_next, dim=1)[0]
         return q_vals_next
         
     @torch.no_grad()
-    def _calc_next_obs_q_vals_double_q(self, non_final_next_obs, done_flags):
+    def _calc_next_obs_q_vals_double_q(self, next_obs, done_flags):
         """Calculate the value of the next state according to the double Q learning rule.
         It decouples the action selection (done via online network) and the action evaluation (done via target network)."""
-        q_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
-        non_final_q_vals_target_net = self.q_net_target(non_final_next_obs)
-        non_final_q_vals_online_net = self.q_net(non_final_next_obs)
-        max_idcs = torch.max(non_final_q_vals_online_net, dim=1)[1]
-        max_target_vals = non_final_q_vals_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
-        q_vals_next[~done_flags] = max_target_vals
+        q_vals_next_target_net = self.q_net_target(next_obs)
+        q_vals_next_online_net = self.q_net(next_obs)
+        max_idcs = torch.max(q_vals_next_online_net, dim=1)[1]
+        q_vals_next = q_vals_next_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
+        q_vals_next = q_vals_next * (~done_flags.unsqueeze(-1))
         return q_vals_next
 
     def calc_target_val(self, rewards, done_flags, next_obs):
@@ -108,11 +105,10 @@ class V(torch.nn.Module):
         return self.v_net(obs)
 
     @torch.no_grad()
-    def _calc_next_obs_vals(self, non_final_next_obs, done_flags):
+    def _calc_next_obs_vals(self, next_obs, done_flags):
         """If a done_flag is set the next obs val is 0, else calculate it"""
-        v_vals_next = torch.zeros(done_flags.shape, device=done_flags.device, dtype=non_final_next_obs.dtype)
-        v_vals_next[~done_flags] = self.v_net_target(non_final_next_obs).squeeze(1)
-        return v_vals_next
+        v_vals_next = self.v_net_target(next_obs) * (~done_flags.unsqueeze(-1))
+        return v_vals_next.squeeze()
 
     def calc_target_val(self, rewards, done_flags, next_obs):
         v_vals_next = self._calc_next_obs_vals(next_obs, done_flags)
@@ -147,9 +143,9 @@ class QV(torch.nn.Module):
     def forward(self, obs):
         return self.q(obs)
         
-    def calc_loss(self, obs, actions, rewards, done_flags, non_final_next_obs, extra_info):
-        v_target = self.v.calc_target_val(rewards, done_flags, non_final_next_obs)
-        loss_args = (obs, actions, rewards, done_flags, non_final_next_obs, extra_info)
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+        v_target = self.v.calc_target_val(rewards, done_flags, next_obs)
+        loss_args = (obs, actions, rewards, done_flags, next_obs, extra_info)
         v_loss = self.v.calc_loss(*loss_args, targets=v_target)
         q_loss = self.q.calc_loss(*loss_args, targets=v_target)
         loss = (v_loss + q_loss).mean()
@@ -166,10 +162,10 @@ class QV(torch.nn.Module):
 
 class QVMax(QV):
     """QVMax is an off-policy variant of QV. The V-net is trained by using the Q-net and vice versa."""
-    def calc_loss(self, obs, actions, rewards, done_flags, non_final_next_obs, extra_info):
-        q_target = self.q.calc_target_val(rewards, done_flags, non_final_next_obs)
-        v_target = self.v.calc_target_val(rewards, done_flags, non_final_next_obs)
-        loss_args = (obs, actions, rewards, done_flags, non_final_next_obs, extra_info)
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+        q_target = self.q.calc_target_val(rewards, done_flags, next_obs)
+        v_target = self.v.calc_target_val(rewards, done_flags, next_obs)
+        loss_args = (obs, actions, rewards, done_flags, next_obs, extra_info)
         v_loss = self.v.calc_loss(*loss_args, targets=q_target)
         q_loss = self.q.calc_loss(*loss_args, targets=v_target)
         loss = (v_loss + q_loss).mean()
@@ -222,25 +218,14 @@ class IQN(torch.nn.Module):
             # Bring in same shape as q_targets_next:
             action_idx = action_idx.unsqueeze(-1).expand(batch_size, self.num_quantiles, 1)
             # Take max actions
-            print()
-            print("act ids shape. ", action_idx.shape)
             q_targets_next = q_preds_next.gather(dim=2, index=action_idx).transpose(1, 2)
-            print(q_targets_next.shape)
             # Compute Q targets for current states
-            q_targets = rewards.unsqueeze(-1) + (self.gamma * q_targets_next * (~done_flags.unsqueeze(-1)))
-            print("rew shape: ", rewards.unsqueeze(-1).shape)
-            print(q_targets.shape)
+            q_targets = rewards.unsqueeze(-1).unsqueeze(-1) + (self.gamma * q_targets_next * (~done_flags.unsqueeze(-1).unsqueeze(-1)))
             # Get expected Q values from local model
             q_expected, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
-            print(q_expected.shape)
             action_index = actions.unsqueeze(-1).unsqueeze(-1)
-            print("act index shape: ", action_index.shape)
             action_index = action_index.expand(batch_size, self.num_quantiles, 1)
-            print(action_index.shape)
             q_expected = q_expected.gather(2, action_index)
-            print("q target: ", q_targets.shape)
-            print("q expected: ", q_expected.shape)
-
         else:
             q_t_n = q_preds_next.mean(dim=1)
             # calculate log-pi
@@ -250,9 +235,9 @@ class IQN(torch.nn.Module):
 
             pi_target = torch.nn.functional.softmax(q_t_n / self.entropy_tau, dim=1).unsqueeze(1)
 
-            Q_target = (self.gamma * (
+            q_target = (self.gamma * (
                         pi_target * (q_preds_next - tau_log_pi_next) * (~done_flags.unsqueeze(-1))).sum(2)).unsqueeze(1)
-            assert Q_target.shape == (batch_size, 1, self.num_quantiles)
+            assert q_target.shape == (batch_size, 1, self.num_quantiles)
 
             q_k_target = self.q_net_target(obs).detach()
             v_k_target = q_k_target.max(1)[0].unsqueeze(-1)
@@ -267,7 +252,7 @@ class IQN(torch.nn.Module):
             munchausen_reward = (rewards + self.alpha * torch.clamp(munchausen_addon, min=self.lo, max=0)).unsqueeze(-1)
             assert munchausen_reward.shape == (batch_size, 1, 1)
             # Compute Q targets for current states
-            q_targets = munchausen_reward + Q_target
+            q_targets = munchausen_reward + q_target
             # Get expected Q values from local model
             q_k, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
             q_expected = q_k.gather(2, actions.unsqueeze(-1).expand(batch_size, self.num_quantiles, 1))
