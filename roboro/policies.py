@@ -234,28 +234,28 @@ class IQN(torch.nn.Module):
             tau_log_pi_next = (q_t_n - q_t_n.max(1)[0].unsqueeze(-1) - self.entropy_tau * logsum).unsqueeze(1)
 
             pi_target = torch.nn.functional.softmax(q_t_n / self.entropy_tau, dim=1).unsqueeze(1)
-
-            q_target = (self.gamma * (
-                        pi_target * (q_preds_next - tau_log_pi_next) * (~done_flags.unsqueeze(-1))).sum(2)).unsqueeze(1)
+            q_target = (self.gamma *
+                        (pi_target * (q_preds_next - tau_log_pi_next) * (~done_flags.unsqueeze(-1).unsqueeze(-1))).sum(2)
+                        ).unsqueeze(1)
             assert q_target.shape == (batch_size, 1, self.num_quantiles)
 
             q_k_target = self.q_net_target(obs).detach()
             v_k_target = q_k_target.max(1)[0].unsqueeze(-1)
-            tau_log_pik = q_k_target - v_k_target - self.entropy_tau * torch.logsumexp( \
-                    (q_k_target - v_k_target) / self.entropy_tau, 1).unsqueeze(-1)
+            tau_log_pik = q_k_target - v_k_target - self.entropy_tau *\
+                          torch.logsumexp((q_k_target - v_k_target) / self.entropy_tau, 1).unsqueeze(-1)
 
             assert tau_log_pik.shape == (batch_size, self.action_size), "shape instead is {}".format(
                 tau_log_pik.shape)
-            munchausen_addon = tau_log_pik.gather(1, actions)
+            munchausen_addon = tau_log_pik.gather(1, actions.unsqueeze(-1))
 
             # calc munchausen reward:
-            munchausen_reward = (rewards + self.alpha * torch.clamp(munchausen_addon, min=self.lo, max=0)).unsqueeze(-1)
+            munchausen_reward = (rewards.unsqueeze(-1) + self.alpha * torch.clamp(munchausen_addon, min=self.lo, max=0)).unsqueeze(-1)
             assert munchausen_reward.shape == (batch_size, 1, 1)
             # Compute Q targets for current states
             q_targets = munchausen_reward + q_target
             # Get expected Q values from local model
             q_k, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
-            q_expected = q_k.gather(2, actions.unsqueeze(-1).expand(batch_size, self.num_quantiles, 1))
+            q_expected = q_k.gather(2, actions.unsqueeze(-1).unsqueeze(-1).expand(batch_size, self.num_quantiles, 1))
             assert q_expected.shape == (batch_size, self.num_quantiles, 1)
 
         # Quantile Huber loss
