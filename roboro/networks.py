@@ -113,7 +113,7 @@ class IQNNet(torch.nn.Module):
         """
         Calculating the cosinus values depending on the number of tau samples
         """
-        taus = torch.rand(batch_size, n_tau).unsqueeze(-1)  # (batch_size, n_tau, 1)
+        taus = torch.rand(batch_size, n_tau, 1, dtype=self.pis.dtype, device=self.pis.device)  # (batch_size, n_tau, 1)
         cos = torch.cos(taus * self.pis)
 
         assert cos.shape == (batch_size, n_tau, self.n_cos), "cos shape is incorrect"
