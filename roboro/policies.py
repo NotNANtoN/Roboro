@@ -209,6 +209,8 @@ class IQN(torch.nn.Module):
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         batch_size = done_flags.shape[0]
+        rewards = rewards.unsqueeze(-1)
+        done_flags = done_flags.unsqueeze(-1).unsqueeze(-1)
 
         q_preds_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
         if not self.munchausen:
@@ -220,7 +222,7 @@ class IQN(torch.nn.Module):
             # Take max actions
             q_targets_next = q_preds_next.gather(dim=2, index=action_idx).transpose(1, 2)
             # Compute Q targets for current states
-            q_targets = rewards.unsqueeze(-1).unsqueeze(-1) + (self.gamma * q_targets_next * (~done_flags.unsqueeze(-1).unsqueeze(-1)))
+            q_targets = rewards.unsqueeze(-1) + (self.gamma * q_targets_next * (~done_flags))
             # Get expected Q values from local model
             q_expected, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
             action_index = actions.unsqueeze(-1).unsqueeze(-1)
@@ -235,7 +237,7 @@ class IQN(torch.nn.Module):
 
             pi_target = torch.nn.functional.softmax(q_t_n / self.entropy_tau, dim=1).unsqueeze(1)
             q_target = (self.gamma *
-                        (pi_target * (q_preds_next - tau_log_pi_next) * (~done_flags.unsqueeze(-1).unsqueeze(-1))).sum(2)
+                        (pi_target * (q_preds_next - tau_log_pi_next) * (~done_flags)).sum(2)
                         ).unsqueeze(1)
             assert q_target.shape == (batch_size, 1, self.num_quantiles)
 
@@ -249,14 +251,14 @@ class IQN(torch.nn.Module):
             munchausen_addon = tau_log_pik.gather(1, actions.unsqueeze(-1))
 
             # calc munchausen reward:
-            munchausen_reward = (rewards.unsqueeze(-1) + self.alpha * torch.clamp(munchausen_addon, min=self.lo, max=0)).unsqueeze(-1)
-            assert munchausen_reward.shape == (batch_size, 1, 1)
+            munchausen_reward = (rewards + self.alpha * torch.clamp(munchausen_addon, min=self.lo, max=0)).unsqueeze(-1)
+            assert munchausen_reward.shape == (batch_size, 1, 1), f"Wrong shape: {munchausen_reward.shape}"
             # Compute Q targets for current states
             q_targets = munchausen_reward + q_target
             # Get expected Q values from local model
             q_k, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
             q_expected = q_k.gather(2, actions.unsqueeze(-1).unsqueeze(-1).expand(batch_size, self.num_quantiles, 1))
-            assert q_expected.shape == (batch_size, self.num_quantiles, 1)
+            assert q_expected.shape == (batch_size, self.num_quantiles, 1), f"Wrong shape: {q_expected.shape}"
 
         # Quantile Huber loss
         td_error = q_targets - q_expected
