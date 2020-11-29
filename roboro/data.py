@@ -124,9 +124,10 @@ class NStepBuffer(RLBuffer):
         return next_state
 
     def __getitem__(self, idx):
-        out, extra_info = super().__getitem__(idx)
+        out = super().__getitem__(idx)
+        extra_info = out[-1]
         extra_info["n_step"] = self.n_step_used
-        return *out, extra_info
+        return out
 
 
 class RLDataModule(pl.LightningDataModule):
