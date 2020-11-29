@@ -28,9 +28,9 @@ def calculate_huber_loss(td_errors, k=1.0):
 
 
 class Q(torch.nn.Module):
-    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
+    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, n_step=1, net: DictConfig = None):
         super().__init__()
-        self.gamma = gamma
+        self.gamma = gamma ** n_step
         self.q_net = MLP(obs_shape, act_shape, **net)
         self.q_net_target = MLP(obs_shape, act_shape, **net)
         freeze_params(self.q_net_target)
@@ -91,9 +91,9 @@ class Q(torch.nn.Module):
 
 class V(torch.nn.Module):
     """A state value network"""
-    def __init__(self, obs_shape, gamma=0.99, net: DictConfig = None):
+    def __init__(self, obs_shape, gamma=0.99, n_step=1, net: DictConfig = None):
         super().__init__()
-        self.gamma = gamma
+        self.gamma = gamma ** n_step
         v_out_size = 1
         net = dict(net)
         del net["dueling"]
@@ -134,10 +134,10 @@ class QV(torch.nn.Module):
     """Train a state-action value network (Q) network and an additional state value network (V) and
     train the Q net using the V net.
     """
-    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
+    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, n_step=1, net: DictConfig = None):
         super().__init__()
-        self.v = V(obs_shape, gamma, net=net)
-        self.q = Q(obs_shape, act_shape, gamma, double_q, net=net)
+        self.v = V(obs_shape, gamma, n_step=n_step, net=net)
+        self.q = Q(obs_shape, act_shape, gamma, double_q, n_step=n_step, net=net)
         # TODO: if dueling is set, try to incorporate the V net into the Q net
 
     def forward(self, obs):
@@ -175,7 +175,7 @@ class QVMax(QV):
 class IQN(torch.nn.Module):
     """IQN Agent that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
     """
-    def __init__(self, state_size, action_size, gamma=0.99, munchausen=False, tau=1e-3, num_quantiles=8,
+    def __init__(self, state_size, action_size, gamma=0.99, munchausen=False, n_step=1, tau=1e-3, num_quantiles=8,
                  net: DictConfig = None):
         """Initialize an Agent object.
 
@@ -196,8 +196,7 @@ class IQN(torch.nn.Module):
         self.entropy_tau = 0.03
         self.lo = -1
         self.alpha = 0.9
-        self.gamma = gamma
-        # TODO: maybe gamma needs to be adjusted based off n-steps
+        self.gamma = gamma ** n_step
 
         # IQN-Network
         self.q_net = IQNNet(state_size, action_size, num_quantiles, **net)

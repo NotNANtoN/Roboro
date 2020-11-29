@@ -7,7 +7,7 @@ from torch.optim.optimizer import Optimizer
 from omegaconf import DictConfig
 
 from roboro.agent import Agent
-from roboro.data import RLDataModule, RLBuffer
+from roboro.data import RLDataModule, RLBuffer, NStepBuffer
 
 
 class Learner(pl.LightningModule):
@@ -34,21 +34,30 @@ class Learner(pl.LightningModule):
                  val_ds: str = None,
                  test_env: str = None,
                  test_ds: str = None,
+
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
+
                  warm_start_size: int = 1000,
                  buffer_size: int = 100000,
                  steps_per_batch: int = 1,
+
                  frame_stack: int = 0,
                  frameskip: int = 2,
                  grayscale: int = 0,
+
                  agent_args: DictConfig = None,
                  ):
         super().__init__()
         self.save_hyperparameters()
-        # init env
+        # Create replay buffer
         update_freq = 0
-        self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
+        if agent_args.policy.n_step > 1:
+            self.buffer = NStepBuffer(buffer_size, update_freq=update_freq,
+                                      n_step=agent_args.policy.n_step, gamma=agent_args.policy.gamma)
+        else:
+            self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
+        # Create envs and dataloaders
         self.datamodule = RLDataModule(self.buffer,
                                        train_env, train_ds,
                                        val_env, val_ds,

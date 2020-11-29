@@ -1,4 +1,5 @@
 import random
+import itertools
 from collections import deque, defaultdict
 
 import pytorch_lightning as pl
@@ -9,14 +10,24 @@ from torch.utils.data import random_split, DataLoader
 from roboro.env_wrappers import create_env
 
 
-class RLBuffer(torch.utils.data.IterableDataset):
-    def __init__(self, max_size, update_freq=0):
-        self.update_freq = update_freq
+class sliceable_deque(deque):
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return type(self)(itertools.islice(self, index.start,
+                                               index.stop, index.step))
+        return deque.__getitem__(self, index)
 
-        self.states = deque(maxlen=max_size)
-        self.rewards = deque(maxlen=max_size)
-        self.actions = deque(maxlen=max_size)
-        self.dones = deque(maxlen=max_size)
+
+class RLBuffer(torch.utils.data.IterableDataset):
+    def __init__(self, max_size, update_freq=0, n_step=0, gamma=0.99):
+        self.update_freq = update_freq
+        self.n_step = n_step
+        self.gamma = gamma
+
+        self.states = sliceable_deque(maxlen=max_size)
+        self.rewards = sliceable_deque(maxlen=max_size)
+        self.actions = sliceable_deque(maxlen=max_size)
+        self.dones = sliceable_deque(maxlen=max_size)
         self.extra_info = defaultdict(deque)
 
         # Indexing fields:
@@ -24,25 +35,17 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.curr_idx = 0
         self.looped_once = False
         self.should_stop = False
-        
-        # TODO: add n-step replay buffer by summing reward of future steps to current reward
-
-    #def __len__(self):
-    #    """ Return number of transitions stored so far """
-    #    return len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
 
     def __getitem__(self, idx):
         """ Return a single transition """
-        # Check if there is a next_state, if so stack frames:
-        next_index = idx + 1
-        is_end = self.dones[idx]
-        # Stack states:
+        # Stack states by calling .to():
         state = self.states[idx].to("cpu")
-        next_state = self.states[next_index].to("cpu") if not is_end else state
+        next_state = self.get_next_state(idx, state)
         # Return extra info
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
         extra_info["idx"] = idx
-        return state, self.actions[idx], self.rewards[idx], is_end, next_state, extra_info
+        reward = self.get_reward(idx)
+        return state, self.actions[idx], reward, self.dones[idx], next_state, extra_info
 
     def __iter__(self):
         count = 0
@@ -74,11 +77,56 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def add_field(self, name, val):
         self.extra_info[name].append(val)
 
+    def get_reward(self, idx):
+        """ Method that can be overriden by subclasses"""
+        return self.rewards[idx]
+
+    def get_next_state(self, idx, state):
+        """ Method that can be overriden by subclasses"""
+        next_state = self.states[idx + 1].to("cpu") if not self.is_end(idx) else torch.zeros_like(state)
+        return next_state
+
+    def is_end(self, idx):
+        return self.dones[idx] or idx == len(self.states) - 1
+
     def update(self, extra_info):
+        """ PER weight update"""
         pass
 
 
-from torch.utils.data import random_split
+class NStepBuffer(RLBuffer):
+    def __init__(self, max_size, update_freq=0, n_step=0, gamma=0.99):
+        super(NStepBuffer, self).__init__(max_size, update_freq=update_freq)
+        self.n_step = n_step
+        self.gamma = gamma
+        # TODO: make this a wrapper when more Replaybuffer variations are introduced
+
+        # TODO!: need to also adjust the returned "done_flag" to belong to the state in n-1 steps...
+
+    def get_reward(self, idx):
+        """ For n-step add rewards of discounted next n steps to current reward"""
+        n_step_reward = 0
+        for count, step_reward in enumerate(self.rewards[idx: idx + self.n_step]):
+            n_step_reward += step_reward * self.gamma ** count
+            if self.dones[idx + count]:
+                break
+        self.n_step_used = count + 1
+        return n_step_reward
+
+    def get_next_state(self, idx, state):
+        count = 0
+        done_slice = self.dones[idx: idx + self.n_step]
+        for count, done in enumerate(done_slice):
+            if done:
+                break
+        n_step_idx = idx + count
+        next_state = super().get_next_state(n_step_idx, state)
+        return next_state
+
+    def __getitem__(self, idx):
+        out, extra_info = super().__getitem__(idx)
+        extra_info["n_step"] = self.n_step_used
+        return *out, extra_info
 
 
 class RLDataModule(pl.LightningDataModule):

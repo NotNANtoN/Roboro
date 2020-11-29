@@ -40,6 +40,7 @@ agent:
   target_net_polyak_val: 0.99
   policy:
     gamma: 0.99
+    n_step: 0
     net:
       dueling: 0
       noisy_layers: 0

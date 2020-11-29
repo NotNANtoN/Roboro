@@ -44,7 +44,6 @@ class Agent(torch.nn.Module):
                  ):
         super().__init__()
         # Set hyperparams
-        self.eps_start = eps_start
         self.epsilon = eps_start
         self.stored_epsilon = self.epsilon
         self.target_net_hard_steps = target_net_hard_steps
