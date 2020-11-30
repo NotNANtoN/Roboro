@@ -30,7 +30,7 @@ def calculate_huber_loss(td_errors, k=1.0):
 class Q(torch.nn.Module):
     def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, n_step=1, net: DictConfig = None):
         super().__init__()
-        self.gamma = gamma ** n_step
+        self.gamma = gamma
         self.q_net = MLP(obs_shape, act_shape, **net)
         self.q_net_target = MLP(obs_shape, act_shape, **net)
         freeze_params(self.q_net_target)
@@ -62,10 +62,18 @@ class Q(torch.nn.Module):
         q_vals_next = q_vals_next * (~done_flags.unsqueeze(-1))
         return q_vals_next
 
-    def calc_target_val(self, rewards, done_flags, next_obs):
+    def _calc_gammas(self, extra_info):
+        if "n_step" in extra_info:
+            gammas = self.gamma ** extra_info["n_step"]
+        else:
+            gammas = self.gamma
+        return gammas
+
+    def calc_target_val(self, rewards, done_flags, next_obs, extra_info):
         q_vals_next = self._next_state_func(next_obs, done_flags)
         assert q_vals_next.shape == rewards.shape
-        targets = rewards + self.gamma * q_vals_next
+        gammas = self._calc_gammas(extra_info)
+        targets = rewards + gammas * q_vals_next
         return targets
 
     def _get_q_preds(self, obs, actions):
@@ -77,7 +85,7 @@ class Q(torch.nn.Module):
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
         preds = self._get_q_preds(obs, actions)
         if targets is None:
-            targets = self.calc_target_val(rewards, done_flags, next_obs)
+            targets = self.calc_target_val(rewards, done_flags, next_obs, extra_info)
         assert targets.shape == preds.shape
         loss = (targets - preds) ** 2
         return loss.mean()

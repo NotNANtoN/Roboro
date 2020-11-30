@@ -8,6 +8,7 @@ import numpy as np
 from torch.utils.data import random_split, DataLoader
 
 from roboro.env_wrappers import create_env
+from roboro.utils import apply_to_state
 
 
 class sliceable_deque(deque):
@@ -23,7 +24,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.update_freq = update_freq
         self.n_step = n_step
         self.gamma = gamma
-
+        self.dtype = torch.float32  # can be overridden by trainer to be float16
+        # Storage fields
         self.states = sliceable_deque(maxlen=max_size)
         self.rewards = sliceable_deque(maxlen=max_size)
         self.actions = sliceable_deque(maxlen=max_size)
@@ -39,7 +41,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def __getitem__(self, idx):
         """ Return a single transition """
         # Stack states by calling .to():
-        state = self.states[idx].to("cpu")
+        state = self.move(self.states[idx])
         next_state = self.get_next_state(idx, state)
         # Return extra info
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
@@ -83,7 +85,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
 
     def get_next_state(self, idx, state):
         """ Method that can be overriden by subclasses"""
-        next_state = self.states[idx + 1].to("cpu") if not self.is_end(idx) else torch.zeros_like(state)
+        next_state = self.move(self.states[idx + 1]) if not self.is_end(idx) else torch.zeros_like(state)
         return next_state
 
     def is_end(self, idx):
@@ -92,6 +94,10 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def update(self, extra_info):
         """ PER weight update"""
         pass
+
+    def move(self, obs):
+        # convert to correct type (for half precision compatibility):
+        return apply_to_state(lambda x: x.to("cpu", self.dtype), obs)
 
 
 class NStepBuffer(RLBuffer):
@@ -132,12 +138,13 @@ class NStepBuffer(RLBuffer):
 
 class RLDataModule(pl.LightningDataModule):
     def __init__(self, buffer, train_env=None, train_ds=None, val_env=None, val_ds=None, test_env=None, test_ds=None,
-                 batch_size=16,
+                 batch_size=16, num_workers=0,
                  **env_kwargs):
         super().__init__()
         assert train_env is not None or train_ds is not None, "Can't fit agent without training data!"
         self.buffer = buffer
         self.batch_size = batch_size
+        self.num_workers = num_workers
 
         self.train_env, self.train_dl = None, None
         if train_env is not None:
@@ -171,7 +178,8 @@ class RLDataModule(pl.LightningDataModule):
         quit()
 
     def _dataloader(self, ds) -> DataLoader:
-        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=0)#, collate_fn=self.collate)
+        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=self.num_workers)
+        #, collate_fn=self.collate)
 
     def train_dataloader(self) -> DataLoader:
         """Get train loader"""

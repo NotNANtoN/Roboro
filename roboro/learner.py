@@ -1,6 +1,7 @@
 from typing import Tuple, List, Dict, Optional, Any
 
 import pytorch_lightning as pl
+import numpy as np
 import torch
 import torch.optim as optim
 from torch.optim.optimizer import Optimizer
@@ -37,6 +38,7 @@ class Learner(pl.LightningModule):
 
                  learning_rate: float = 1e-4,
                  batch_size: int = 32,
+                 num_workers: int = 0,
 
                  warm_start_size: int = 1000,
                  buffer_size: int = 100000,
@@ -62,10 +64,11 @@ class Learner(pl.LightningModule):
                                        train_env, train_ds,
                                        val_env, val_ds,
                                        test_env, test_ds,
-                                       batch_size=batch_size,
                                        frame_stack=frame_stack,
                                        frameskip=frameskip,
                                        grayscale=grayscale,
+                                       batch_size=batch_size,
+                                       num_workers=num_workers,
                                        )
         self.train_env, self.train_obs = self.datamodule.get_train_env()
         self.val_env, self.val_obs = self.datamodule.get_val_env()
@@ -80,8 +83,12 @@ class Learner(pl.LightningModule):
         self.total_eps = 0
         self.epoch_steps = 0
         self.train_step_count = 0  # number of env steps to do this batch - gets incremented by steps_per_batch every batch
+        # metrics to log
+        self.mean_val_return = 0
+        self.max_val_return = -np.inf
+        self.n_evals = 0
 
-        # tracking params:
+        # tracking hyperparams:
         # TODO: calc steps by giving percentage at which we want to evaluate
         self.steps_per_epoch = min(max(steps / 100, 500), 20000)
         print("Steps per epoch: ", self.steps_per_epoch)
@@ -100,6 +107,7 @@ class Learner(pl.LightningModule):
 
     def on_fit_start(self):
         """Fill the replay buffer with explorative experiences"""
+        self.buffer.dtype = self.dtype  # give dtype to buffer for type compatibility in mixed precision
         if self.warm_start > 0:
             self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
             self.train_obs = self.train_env.reset()
@@ -112,7 +120,6 @@ class Learner(pl.LightningModule):
     def on_train_epoch_start(self) -> None:
         """Reset counters"""
         self.buffer.should_stop = False
-        self.total_steps += self.epoch_steps
         self.epoch_steps = 0
 
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
@@ -120,11 +127,13 @@ class Learner(pl.LightningModule):
         if self.train_env is None:
             return
         self.train_step_count += self.steps_per_batch
+        step_increase = 1 if self.frameskip <= 1 else self.frameskip
         while self.train_step_count > 1:
             self.train_step_count -= 1
             next_state, action, r, is_done = self.step_agent(self.train_obs, self.train_env, store=True)
             self.train_obs = next_state
-            self.epoch_steps += 1 if self.frameskip <= 1 else self.frameskip
+            self.epoch_steps += step_increase
+            self.total_steps += step_increase
             if is_done:
                 self.train_obs = self.train_env.reset()
                 self.total_eps += 1
@@ -142,11 +151,6 @@ class Learner(pl.LightningModule):
         Returns:
             Training loss and log metrics
         """
-        # convert to correct type (for half precision compatibility):
-        from roboro.utils import apply_to_state
-        batch[0] = apply_to_state(lambda x: x.to(self.dtype), batch[0])  # state
-        batch[4] = apply_to_state(lambda x: x.to(self.dtype), batch[4])  # next state
-        # TODO: isn't there a better solution to this?
         # calculates training loss
         loss, extra_info = self.agent.calc_loss(*batch)
         # update target nets, epsilon, etc:
@@ -169,6 +173,13 @@ class Learner(pl.LightningModule):
         assert n == len(val_reward_lists)
         avg_return = sum(val_reward_lists) / n
         self.log('val_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.n_evals += 1
+        self.mean_val_return = self.mean_val_return + (avg_return - self.mean_val_return) / self.n_evals
+
+        self.log('mean_val', self.mean_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        if avg_return > self.max_val_return:
+            self.max_val_return = avg_return
+        self.log('max_val', self.max_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def validation_step(self, batch, *args, **kwargs):
         if batch is not None:

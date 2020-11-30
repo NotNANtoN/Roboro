@@ -21,6 +21,7 @@ learner:
   steps_per_batch: 1
   learning_rate: 0.00003
   batch_size: 32
+  num_workers: 0
   # size params
   warm_start_size: 1000
   buffer_size: 100000
