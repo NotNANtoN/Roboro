@@ -1,0 +1,8 @@
+# @package _global_
+
+agent:
+  munch_q: 1
+  policy:
+    tau: 0.03
+    l0: -1
+    alpha: 0.9

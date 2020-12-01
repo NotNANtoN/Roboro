@@ -11,6 +11,11 @@ trainer:
   terminate_on_nan: 0  # Needs to be 0 - otherwise this takes up a third of training time!
   precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
 
+opt:
+  name: adam
+  eps: 0.00001
+  lr: 0.00003
+
 learner:
   train_env:
   # env wrappers params
@@ -19,7 +24,6 @@ learner:
   grayscale: 0
   # training params
   steps_per_batch: 1
-  learning_rate: 0.00003
   batch_size: 32
   num_workers: 0
   # size params
@@ -31,6 +35,8 @@ agent:
   qv: 0
   qvmax: 0
   iqn: 0
+  soft_q: 0
+  munch_q: 0
   # learn alg params
   eps_start: 0.1
   # feature extraction net params

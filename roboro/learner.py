@@ -36,7 +36,6 @@ class Learner(pl.LightningModule):
                  test_env: str = None,
                  test_ds: str = None,
 
-                 learning_rate: float = 1e-4,
                  batch_size: int = 32,
                  num_workers: int = 0,
 
@@ -49,6 +48,7 @@ class Learner(pl.LightningModule):
                  grayscale: int = 0,
 
                  agent_args: DictConfig = None,
+                 opt_args: DictConfig = None
                  ):
         super().__init__()
         self.save_hyperparameters()
@@ -97,8 +97,12 @@ class Learner(pl.LightningModule):
         # hyperparams:
         self.warm_start = warm_start_size
         self.batch_size = batch_size
-        self.lr = learning_rate
         self.frameskip = frameskip  # need to store here to keep track of real number of env interactions
+
+        # optimizer hyperparams:
+        self.opt_name = opt_args.name
+        self.lr = opt_args.lr
+        self.opt_eps = opt_args.eps
 
     def forward(self, obs: torch.Tensor) -> int:
         obs = obs.to(self.device, self.dtype).unsqueeze(0)
@@ -172,7 +176,7 @@ class Learner(pl.LightningModule):
         val_reward_lists = self.run(self.val_env, n_eps=n)
         assert n == len(val_reward_lists)
         avg_return = sum(val_reward_lists) / n
-        self.log('val_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log('val_ret', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         self.n_evals += 1
         self.mean_val_return = self.mean_val_return + (avg_return - self.mean_val_return) / self.n_evals
 
@@ -248,7 +252,8 @@ class Learner(pl.LightningModule):
         return total_rewards
 
     def configure_optimizers(self) -> Optimizer:
-        optimizer = optim.Adam(self.agent.parameters(), lr=self.lr, eps=1e-5)
+        if self.opt_name == "adam":
+            optimizer = optim.Adam(self.agent.parameters(), lr=self.lr, eps=self.opt_eps)
         return optimizer
 
     def get_progress_bar_dict(self):

@@ -5,7 +5,7 @@ import torch
 import gym
 from omegaconf import DictConfig
 
-from roboro.policies import Q, QV, QVMax, IQN
+from roboro.policies import Q, SoftQ, MunchQ, QV, QVMax, IQN
 from roboro.networks import CNN, MLP
 from roboro.utils import Standardizer
 
@@ -20,13 +20,18 @@ class Agent(torch.nn.Module):
     and that calculates a loss based off an experience tuple
     """
     @staticmethod
-    def create_policy(obs_size, act_size, policy_args, use_qv=False, use_qvmax=False, iqn=False):
+    def create_policy(obs_size, act_size, policy_args,
+                      use_qv=False, use_qvmax=False, iqn=False, use_soft_q=False, use_munch_q=False):
         if iqn:
             return IQN(obs_size, act_size, **policy_args)
         elif use_qv:
             return QV(obs_size, act_size, **policy_args)
         elif use_qvmax:
             return QVMax(obs_size, act_size, **policy_args)
+        elif use_soft_q:
+            return SoftQ(obs_size, act_size, **policy_args)
+        elif use_munch_q:
+            return MunchQ(obs_size, act_size, **policy_args)
         else:
             return Q(obs_size, act_size, **policy_args)
 
@@ -34,6 +39,9 @@ class Agent(torch.nn.Module):
                  qv: bool = False,
                  qvmax: bool = False,
                  iqn: bool = False,
+                 soft_q: bool = False,
+                 munch_q: bool = False,
+
                  eps_start: float = 0.1,
                  target_net_hard_steps: int = 1000,
                  target_net_polyak_val: float = 0.99,
@@ -61,7 +69,8 @@ class Agent(torch.nn.Module):
             else MLP(obs_shape[0], feat_layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, self.act_shape, use_qv=qv, use_qvmax=qvmax, iqn=iqn,
+        self.policy = self.create_policy(obs_feature_shape, self.act_shape,
+                                         use_qv=qv, use_qvmax=qvmax, iqn=iqn, use_soft_q=soft_q, use_munch_q=munch_q,
                                          policy_args=policy)
 
     def update_self(self, steps):

@@ -44,22 +44,27 @@ class Q(torch.nn.Module):
         return self.q_net(obs)
 
     @torch.no_grad()
+    def _q_pred_next_state(self, next_obs, done_flags, net):
+        """ Specified in function to be potentially overriden by subclasses"""
+        return net(next_obs) * (~done_flags.unsqueeze(-1))
+
     def _calc_next_obs_q_vals(self, next_obs, done_flags):
         """Calculate the value of the next state via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
-        q_vals_next = self.q_net_target(next_obs) * (~done_flags.unsqueeze(-1))
+        q_vals_next = self._q_pred_next_state(next_obs, done_flags, self.q_net_target)
         q_vals_next = torch.max(q_vals_next, dim=1)[0]
         return q_vals_next
         
-    @torch.no_grad()
     def _calc_next_obs_q_vals_double_q(self, next_obs, done_flags):
         """Calculate the value of the next state according to the double Q learning rule.
-        It decouples the action selection (done via online network) and the action evaluation (done via target network)."""
-        q_vals_next_target_net = self.q_net_target(next_obs)
-        q_vals_next_online_net = self.q_net(next_obs)
+        It decouples the action selection (done via online network) and the action evaluation (done via target network).
+        """
+        # Next state action selection
+        q_vals_next_online_net = self._q_pred_next_state(next_obs, done_flags, self.q_net)
         max_idcs = torch.max(q_vals_next_online_net, dim=1)[1]
+        # Next state action evaluation
+        q_vals_next_target_net = self._q_pred_next_state(next_obs, done_flags, self.q_net_target)
         q_vals_next = q_vals_next_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
-        q_vals_next = q_vals_next * (~done_flags.unsqueeze(-1))
         return q_vals_next
 
     def _calc_gammas(self, extra_info):
@@ -69,7 +74,7 @@ class Q(torch.nn.Module):
             gammas = self.gamma
         return gammas
 
-    def calc_target_val(self, rewards, done_flags, next_obs, extra_info):
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         q_vals_next = self._next_state_func(next_obs, done_flags)
         assert q_vals_next.shape == rewards.shape
         gammas = self._calc_gammas(extra_info)
@@ -85,8 +90,8 @@ class Q(torch.nn.Module):
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
         preds = self._get_q_preds(obs, actions)
         if targets is None:
-            targets = self.calc_target_val(rewards, done_flags, next_obs, extra_info)
-        assert targets.shape == preds.shape
+            targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+        assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         loss = (targets - preds) ** 2
         return loss.mean()
 
@@ -95,6 +100,39 @@ class Q(torch.nn.Module):
 
     def update_target_nets_soft(self, val):
         polyak_update(self.q_net, self.q_net_target, val)
+
+
+class SoftQ(Q):
+    def __init__(self, *args, tau=0.03, l0=-1, **kwargs):
+        """Entropy-regularized Q-learning. Clip entropy to l0 (=-1) to avoid numeric instability in case of a
+        deterministic policy (would otherwise lead to -inf values)."""
+        super().__init__(*args, **kwargs)
+        self.tau = tau
+        self.l0 = l0
+
+    @torch.no_grad()
+    def _q_pred_next_state(self, next_obs, done_flags, net):
+        next_state_q_vals = super()._q_pred_next_state(next_obs, done_flags, net)
+        next_state_policy_distr = torch.softmax(next_state_q_vals / self.tau, dim=1)
+        next_state_preds = next_state_q_vals - self._calc_entropy(next_state_q_vals)
+        return next_state_policy_distr * next_state_preds
+
+    def _calc_entropy(self, q_vals):
+        return torch.clip(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
+
+
+class MunchQ(SoftQ):
+    def __init__(self, *args, alpha=0.9, **kwargs):
+        """Munchausen Q-learning"""
+        super().__init__(*args, **kwargs)
+        self.alpha = alpha
+
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+        q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+        munch_reward = self._calc_entropy(self.q_net_target(obs))
+        munch_reward = munch_reward.gather(1, actions.unsqueeze(-1)).squeeze()
+        munchausen_targets = q_targets + self.alpha * munch_reward
+        return munchausen_targets
 
 
 class V(torch.nn.Module):
@@ -201,9 +239,12 @@ class IQN(torch.nn.Module):
         self.munchausen = munchausen
         self.tau = tau
         self.num_quantiles = num_quantiles
-        self.entropy_tau = 0.03
-        self.lo = -1
+
+        # Munchausen hyperparams
+        self.ent_tau = 0.03
+        self.l0 = -1
         self.alpha = 0.9
+
         self.gamma = gamma ** n_step
 
         # IQN-Network
@@ -217,55 +258,47 @@ class IQN(torch.nn.Module):
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         batch_size = done_flags.shape[0]
         rewards = rewards.unsqueeze(-1)
+        actions = actions.unsqueeze(-1)
         done_flags = done_flags.unsqueeze(-1).unsqueeze(-1)
 
-        q_preds_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
+        q_quants_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
+        exp_q_next = q_quants_next.mean(dim=1)
         if not self.munchausen:
-
             # Get max predicted Q values (for next states) from target model
-            action_idx = torch.argmax(q_preds_next.mean(dim=1), dim=1, keepdim=True)
+            action_idx = torch.argmax(exp_q_next, dim=1, keepdim=True)
             # Bring in same shape as q_targets_next:
             action_idx = action_idx.unsqueeze(-1).expand(batch_size, self.num_quantiles, 1)
             # Take max actions
-            q_targets_next = q_preds_next.gather(dim=2, index=action_idx).transpose(1, 2)
+            q_targets_next = q_quants_next.gather(dim=2, index=action_idx).transpose(1, 2)
             # Compute Q targets for current states
             q_targets = rewards.unsqueeze(-1) + (self.gamma * q_targets_next * (~done_flags))
-            # Get expected Q values from local model
-            q_expected, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
-            action_index = actions.unsqueeze(-1).unsqueeze(-1)
-            action_index = action_index.expand(batch_size, self.num_quantiles, 1)
-            q_expected = q_expected.gather(2, action_index)
         else:
-            q_t_n = q_preds_next.mean(dim=1)
             # calculate log-pi
-            logsum = torch.logsumexp((q_t_n - q_t_n.max(1)[0].unsqueeze(-1)) / self.entropy_tau, 1).unsqueeze(-1)  # logsum trick
-            assert logsum.shape == (batch_size, 1), "log pi next has wrong shape: {}".format(logsum.shape)
-            tau_log_pi_next = (q_t_n - q_t_n.max(1)[0].unsqueeze(-1) - self.entropy_tau * logsum).unsqueeze(1)
+            tau_log_pi_next = self._calc_entropy(exp_q_next).unsqueeze(1)
 
-            pi_target = torch.nn.functional.softmax(q_t_n / self.entropy_tau, dim=1).unsqueeze(1)
-            q_target = (self.gamma *
-                        (pi_target * (q_preds_next - tau_log_pi_next) * (~done_flags)).sum(2)
+            pi_target = torch.softmax(exp_q_next / self.ent_tau, dim=1).unsqueeze(1)
+            next_state_vals = (self.gamma *
+                         (pi_target * (q_quants_next - tau_log_pi_next) * (~done_flags)).sum(2)
                         ).unsqueeze(1)
-            assert q_target.shape == (batch_size, 1, self.num_quantiles)
+            assert next_state_vals.shape == (batch_size, 1, self.num_quantiles)
 
             q_k_target = self.q_net_target(obs).detach()
-            v_k_target = q_k_target.max(1)[0].unsqueeze(-1)
-            tau_log_pik = q_k_target - v_k_target - self.entropy_tau *\
-                          torch.logsumexp((q_k_target - v_k_target) / self.entropy_tau, 1).unsqueeze(-1)
-
-            assert tau_log_pik.shape == (batch_size, self.action_size), "shape instead is {}".format(
-                tau_log_pik.shape)
-            munchausen_addon = tau_log_pik.gather(1, actions.unsqueeze(-1))
+            tau_log_pi_k = self._calc_entropy(q_k_target)
+            assert tau_log_pi_k.shape == (batch_size, self.action_size), "shape instead is {}".format(
+                tau_log_pi_k.shape)
+            munchausen_addon = tau_log_pi_k.gather(1, actions)
 
             # calc munchausen reward:
-            munchausen_reward = (rewards + self.alpha * torch.clamp(munchausen_addon, min=self.lo, max=0)).unsqueeze(-1)
+            munchausen_reward = (rewards + self.alpha * torch.clamp(munchausen_addon, min=self.l0)).unsqueeze(-1)
             assert munchausen_reward.shape == (batch_size, 1, 1), f"Wrong shape: {munchausen_reward.shape}"
-            # Compute Q targets for current states
-            q_targets = munchausen_reward + q_target
-            # Get expected Q values from local model
-            q_k, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
-            q_expected = q_k.gather(2, actions.unsqueeze(-1).unsqueeze(-1).expand(batch_size, self.num_quantiles, 1))
-            assert q_expected.shape == (batch_size, self.num_quantiles, 1), f"Wrong shape: {q_expected.shape}"
+
+            q_targets = munchausen_reward + next_state_vals
+
+        # Get expected Q values from local model
+        q_k, taus = self.q_net.get_quantiles(obs, self.num_quantiles)
+        action_index = actions.unsqueeze(-1).expand(batch_size, self.num_quantiles, 1)
+        q_expected = q_k.gather(2, action_index)
+        assert q_expected.shape == (batch_size, self.num_quantiles, 1), f"Wrong shape: {q_expected.shape}"
 
         # Quantile Huber loss
         td_error = q_targets - q_expected
@@ -276,6 +309,9 @@ class IQN(torch.nn.Module):
         loss = quantil_l.sum(dim=1).mean(dim=1)  # , keepdim=True if per weights get multipl
         loss = loss.mean()
         return loss
+
+    def _calc_entropy(self, q_vals):
+        return torch.clip(self.ent_tau * torch.log_softmax(q_vals / self.ent_tau, dim=1), min=self.l0)
 
     def update_target_nets_hard(self):
         copy_weights(self.q_net, self.q_net_target)
