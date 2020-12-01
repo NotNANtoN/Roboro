@@ -118,7 +118,7 @@ class SoftQ(Q):
         return next_state_policy_distr * next_state_preds
 
     def _calc_entropy(self, q_vals):
-        return torch.clip(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
+        return torch.clamp(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
 
 
 class MunchQ(SoftQ):
