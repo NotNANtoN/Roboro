@@ -4,6 +4,7 @@ defaults:
 
 path:
 seed:
+render: 0
 env_steps: 10000
 
 trainer:

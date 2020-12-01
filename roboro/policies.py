@@ -209,7 +209,7 @@ class QV(torch.nn.Module):
 class QVMax(QV):
     """QVMax is an off-policy variant of QV. The V-net is trained by using the Q-net and vice versa."""
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_target = self.q.calc_target_val(rewards, done_flags, next_obs)
+        q_target = self.q.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
         v_target = self.v.calc_target_val(rewards, done_flags, next_obs)
         loss_args = (obs, actions, rewards, done_flags, next_obs, extra_info)
         v_loss = self.v.calc_loss(*loss_args, targets=q_target)

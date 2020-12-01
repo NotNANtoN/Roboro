@@ -3,6 +3,10 @@ from collections import deque
 import gym
 import torch
 import numpy as np
+try:
+    import aigar
+except ModuleNotFoundError:
+    print("Aigar envs could not be loaded")
 
 from roboro.utils import apply_rec_to_dict, apply_to_state_list
 
