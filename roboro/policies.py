@@ -27,9 +27,22 @@ def calculate_huber_loss(td_errors, k=1.0):
     return loss
 
 
-class Q(torch.nn.Module):
-    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, n_step=1, net: DictConfig = None):
+class Policy(torch.nn.Module):
+    def __init__(self, gamma):
         super().__init__()
+        self.gamma = gamma
+
+    def _calc_gammas(self, extra_info):
+        if "n_step" in extra_info:
+            gammas = self.gamma ** extra_info["n_step"]
+        else:
+            gammas = self.gamma
+        return gammas
+
+
+class Q(Policy):
+    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
+        super().__init__(gamma)
         self.gamma = gamma
         self.q_net = MLP(obs_shape, act_shape, **net)
         self.q_net_target = MLP(obs_shape, act_shape, **net)
@@ -66,13 +79,6 @@ class Q(torch.nn.Module):
         q_vals_next_target_net = self._q_pred_next_state(next_obs, done_flags, self.q_net_target)
         q_vals_next = q_vals_next_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
         return q_vals_next
-
-    def _calc_gammas(self, extra_info):
-        if "n_step" in extra_info:
-            gammas = self.gamma ** extra_info["n_step"]
-        else:
-            gammas = self.gamma
-        return gammas
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
@@ -137,11 +143,10 @@ class MunchQ(SoftQ):
         return munchausen_targets
 
 
-class V(torch.nn.Module):
+class V(Policy):
     """A state value network"""
-    def __init__(self, obs_shape, gamma=0.99, n_step=1, net: DictConfig = None):
-        super().__init__()
-        self.gamma = gamma ** n_step
+    def __init__(self, obs_shape, gamma=0.99, net: DictConfig = None):
+        super().__init__(gamma)
         v_out_size = 1
         net = dict(net)
         del net["dueling"]
@@ -158,9 +163,11 @@ class V(torch.nn.Module):
         v_vals_next = self.v_net_target(next_obs) * (~done_flags.unsqueeze(-1))
         return v_vals_next.squeeze()
 
-    def calc_target_val(self, rewards, done_flags, next_obs):
+    @torch.no_grad()
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         v_vals_next = self._calc_next_obs_vals(next_obs, done_flags)
-        targets = rewards + self.gamma * v_vals_next
+        gammas = self._calc_gammas(extra_info)
+        targets = rewards + gammas * v_vals_next
         return targets
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
@@ -182,21 +189,24 @@ class QV(torch.nn.Module):
     """Train a state-action value network (Q) network and an additional state value network (V) and
     train the Q net using the V net.
     """
-    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, n_step=1, net: DictConfig = None):
+    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
         super().__init__()
-        self.v = V(obs_shape, gamma, n_step=n_step, net=net)
-        self.q = Q(obs_shape, act_shape, gamma, double_q, n_step=n_step, net=net)
+        self.v = V(obs_shape, gamma, net=net)
+        self.q = Q(obs_shape, act_shape, gamma, double_q, net=net)
         # TODO: if dueling is set, try to incorporate the V net into the Q net
 
     def forward(self, obs):
         return self.q(obs)
-        
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        v_target = self.v.calc_target_val(rewards, done_flags, next_obs)
-        loss_args = (obs, actions, rewards, done_flags, next_obs, extra_info)
+
+    def calc_qv_loss(self, *loss_args, q_target=None, v_target=None):
         v_loss = self.v.calc_loss(*loss_args, targets=v_target)
-        q_loss = self.q.calc_loss(*loss_args, targets=v_target)
+        q_loss = self.q.calc_loss(*loss_args, targets=q_target)
         loss = (v_loss + q_loss).mean()
+        return loss
+
+    def calc_loss(self, *loss_args):
+        v_target = self.v.calc_target_val(*loss_args)
+        loss = self.calc_qv_loss(*loss_args, q_target=v_target, v_target=v_target)
         return loss
         
     def update_target_nets_hard(self):
@@ -210,20 +220,19 @@ class QV(torch.nn.Module):
 
 class QVMax(QV):
     """QVMax is an off-policy variant of QV. The V-net is trained by using the Q-net and vice versa."""
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_target = self.q.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
-        v_target = self.v.calc_target_val(rewards, done_flags, next_obs)
-        loss_args = (obs, actions, rewards, done_flags, next_obs, extra_info)
-        v_loss = self.v.calc_loss(*loss_args, targets=q_target)
-        q_loss = self.q.calc_loss(*loss_args, targets=v_target)
-        loss = (v_loss + q_loss).mean()
+    def calc_loss(self, *loss_args):
+        q_target = self.q.calc_target_val(*loss_args)
+        v_target = self.v.calc_target_val(*loss_args)
+        loss = self.calc_qv_loss(*loss_args, q_target=v_target, v_target=q_target)
         return loss
 
 
-class IQN(torch.nn.Module):
-    """IQN Agent that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
+class IQN(SoftQ):
+    """
+    IQN Agent that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
     """
     def __init__(self, state_size, action_size, gamma=0.99, munchausen=False, n_step=1, tau=1e-3, num_quantiles=8,
+                 l0=-1,
                  net: DictConfig = None):
         """Initialize an Agent object.
 
@@ -235,29 +244,21 @@ class IQN(torch.nn.Module):
             TAU (float): tau for soft updating the network weights
             GAMMA (float): discount factor
         """
-        super(IQN, self).__init__()
+        super().__init__(state_size, action_size, tau=0.03, l0=-1, gamma=gamma)
         self.state_size = state_size
         self.action_size = action_size
         self.munchausen = munchausen
-        self.tau = tau
+        # IQN hyperparams
         self.num_quantiles = num_quantiles
-
         # Munchausen hyperparams
         self.ent_tau = 0.03
-        self.l0 = -1
         self.alpha = 0.9
-
-        self.gamma = gamma ** n_step
-
-        # IQN-Network
+        # Create IQN-Network
         self.q_net = IQNNet(state_size, action_size, num_quantiles, **net)
         self.q_net_target = IQNNet(state_size, action_size, num_quantiles, **net)
         freeze_params(self.q_net_target)
 
-    def forward(self, obs):
-        return self.q_net(obs)
-
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
         batch_size = done_flags.shape[0]
         rewards = rewards.unsqueeze(-1)
         actions = actions.unsqueeze(-1)
@@ -265,6 +266,7 @@ class IQN(torch.nn.Module):
 
         q_quants_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
         exp_q_next = q_quants_next.mean(dim=1)
+        gammas = self._calc_gammas(extra_info)
         if not self.munchausen:
             # Get max predicted Q values (for next states) from target model
             action_idx = torch.argmax(exp_q_next, dim=1, keepdim=True)
@@ -273,13 +275,13 @@ class IQN(torch.nn.Module):
             # Take max actions
             q_targets_next = q_quants_next.gather(dim=2, index=action_idx).transpose(1, 2)
             # Compute Q targets for current states
-            q_targets = rewards.unsqueeze(-1) + (self.gamma * q_targets_next * (~done_flags))
+            q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next * (~done_flags))
         else:
             # calculate log-pi
             tau_log_pi_next = self._calc_entropy(exp_q_next).unsqueeze(1)
 
             pi_target = torch.softmax(exp_q_next / self.ent_tau, dim=1).unsqueeze(1)
-            next_state_vals = (self.gamma *
+            next_state_vals = (gammas *
                          (pi_target * (q_quants_next - tau_log_pi_next) * (~done_flags)).sum(2)
                         ).unsqueeze(1)
             assert next_state_vals.shape == (batch_size, 1, self.num_quantiles)
@@ -311,15 +313,6 @@ class IQN(torch.nn.Module):
         loss = quantil_l.sum(dim=1).mean(dim=1)  # , keepdim=True if per weights get multipl
         loss = loss.mean()
         return loss
-
-    def _calc_entropy(self, q_vals):
-        return torch.clamp(self.ent_tau * torch.log_softmax(q_vals / self.ent_tau, dim=1), min=self.l0)
-
-    def update_target_nets_hard(self):
-        copy_weights(self.q_net, self.q_net_target)
-
-    def update_target_nets_soft(self, val):
-        polyak_update(self.q_net, self.q_net_target, val)
 
 
 class Ensemble(torch.nn.Module):
