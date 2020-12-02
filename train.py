@@ -12,6 +12,22 @@ from omegaconf import DictConfig, OmegaConf
 from roboro.learner import Learner
 
 
+def filter_out_env_override(ovargs):
+    env_start_idx = ovargs.find("env=")
+    env_end_idx = ovargs[env_start_idx:].find(",")
+    if env_end_idx == -1:
+        env_end_idx = len(ovargs)
+    else:
+        env_end_idx += env_start_idx
+    # to remove starting or trailing comma
+    if env_start_idx > 0:
+        env_start_idx -= 1
+    else:
+        env_end_idx += 1
+    ovargs = ovargs[:env_start_idx] + ovargs[env_end_idx:]
+    return ovargs
+
+
 def test_agent(agent, env, render=False):
     """Test agent using normal gym style outside of learner"""
     obs = env.reset()
@@ -53,7 +69,12 @@ def main(args: DictConfig):
             save_top_k=3,
             mode='max')
         # Set up mlflowlogger
-        mlf_logger = MLFlowLogger(experiment_name="Default", tags={"mlflow.runName": args.override_args})
+        exp_name = args.learner.train_env if args.learner.train_env is not None else args.learner.train_ds
+        ovargs = args.override_args
+        ovargs = filter_out_env_override(ovargs)
+        print(exp_name, ovargs)
+        mlf_logger = MLFlowLogger(experiment_name=exp_name,
+                                  tags={"mlflow.runName": ovargs})
 
         # early_stop_callback = EarlyStopping(
         #         monitor='steps',
