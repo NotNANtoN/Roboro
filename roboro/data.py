@@ -42,12 +42,12 @@ class RLBuffer(torch.utils.data.IterableDataset):
         """ Return a single transition """
         # Stack states by calling .to():
         state = self.move(self.states[idx])
-        next_state = self.get_next_state(idx, state)
+        next_state, done = self.get_next_state(idx, state)
         # Return extra info
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
         extra_info["idx"] = idx
         reward = self.get_reward(idx)
-        return state, self.actions[idx], reward, self.dones[idx], next_state, extra_info
+        return state, self.actions[idx], reward, done, next_state, extra_info
 
     def __iter__(self):
         count = 0
@@ -85,8 +85,11 @@ class RLBuffer(torch.utils.data.IterableDataset):
 
     def get_next_state(self, idx, state):
         """ Method that can be overriden by subclasses"""
-        next_state = self.move(self.states[idx + 1]) if not self.is_end(idx) else torch.zeros_like(state)
-        return next_state
+        is_end = self.is_end(idx)
+        if is_end:
+            return torch.zeros_like(state), is_end
+        else:
+            return self.move(self.states[idx + 1]), is_end
 
     def is_end(self, idx):
         return self.dones[idx] or idx == len(self.states) - 1
@@ -96,7 +99,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
         pass
 
     def move(self, obs):
-        # convert to correct type (for half precision compatibility):
+        # Stack LazyFrames frames and convert to correct type (for half precision compatibility):
         return apply_to_state(lambda x: x.to("cpu", self.dtype), obs)
 
 
@@ -106,8 +109,6 @@ class NStepBuffer(RLBuffer):
         self.n_step = n_step
         self.gamma = gamma
         # TODO: make this a wrapper when more Replaybuffer variations are introduced
-
-        # TODO!: need to also adjust the returned "done_flag" to belong to the state in n-1 steps...
 
     def get_reward(self, idx):
         """ For n-step add rewards of discounted next n steps to current reward"""
@@ -126,8 +127,7 @@ class NStepBuffer(RLBuffer):
             if done:
                 break
         n_step_idx = idx + count
-        next_state = super().get_next_state(n_step_idx, state)
-        return next_state
+        return super().get_next_state(n_step_idx, state)
 
     def __getitem__(self, idx):
         out = super().__getitem__(idx)
