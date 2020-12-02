@@ -74,6 +74,7 @@ class Q(torch.nn.Module):
             gammas = self.gamma
         return gammas
 
+    @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         q_vals_next = self._next_state_func(next_obs, done_flags)
         assert q_vals_next.shape == rewards.shape
@@ -113,9 +114,9 @@ class SoftQ(Q):
     @torch.no_grad()
     def _q_pred_next_state(self, next_obs, done_flags, net):
         next_state_q_vals = super()._q_pred_next_state(next_obs, done_flags, net)
-        next_state_policy_distr = torch.softmax(next_state_q_vals / self.tau, dim=1)
+        next_state_policy_distr = torch.softmax(next_state_q_vals, dim=1)
         next_state_preds = next_state_q_vals - self._calc_entropy(next_state_q_vals)
-        return next_state_policy_distr * next_state_preds
+        return (next_state_policy_distr * next_state_preds).mean(dim=1).unsqueeze(-1)
 
     def _calc_entropy(self, q_vals):
         return torch.clamp(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
@@ -127,6 +128,7 @@ class MunchQ(SoftQ):
         super().__init__(*args, **kwargs)
         self.alpha = alpha
 
+    @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
         munch_reward = self._calc_entropy(self.q_net_target(obs))
