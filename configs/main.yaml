@@ -1,6 +1,7 @@
 defaults:
   - env:
   - policy: q
+  - hydra/launcher: basic  # joblib (parallel) or basic (serial)
 
 path:
 seed:

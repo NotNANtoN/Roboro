@@ -3,6 +3,7 @@ checkpoints/
 ml-runs/
 mlruns/
 outputs/
+multirun/
 
 # IDEs
 .idea
