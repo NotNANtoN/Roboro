@@ -313,7 +313,7 @@ class IQN(torch.nn.Module):
         return loss
 
     def _calc_entropy(self, q_vals):
-        return torch.clip(self.ent_tau * torch.log_softmax(q_vals / self.ent_tau, dim=1), min=self.l0)
+        return torch.clamp(self.ent_tau * torch.log_softmax(q_vals / self.ent_tau, dim=1), min=self.l0)
 
     def update_target_nets_hard(self):
         copy_weights(self.q_net, self.q_net_target)
