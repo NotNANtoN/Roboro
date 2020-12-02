@@ -30,6 +30,8 @@ learner:
   # size params
   warm_start_size: 1000
   buffer_size: 100000
+  n_step: 0
+
 
 agent:
   # policy selection
@@ -48,7 +50,6 @@ agent:
   target_net_polyak_val: 0.99
   policy:
     gamma: 0.99
-    n_step: 0
     net:
       dueling: 0
       noisy_layers: 0

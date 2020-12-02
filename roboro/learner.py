@@ -42,6 +42,7 @@ class Learner(pl.LightningModule):
                  warm_start_size: int = 1000,
                  buffer_size: int = 100000,
                  steps_per_batch: int = 1,
+                 n_step: int = 1,
 
                  frame_stack: int = 0,
                  frameskip: int = 2,
@@ -54,9 +55,9 @@ class Learner(pl.LightningModule):
         self.save_hyperparameters()
         # Create replay buffer
         update_freq = 0
-        if agent_args.policy.n_step > 1:
+        if n_step > 1:
             self.buffer = NStepBuffer(buffer_size, update_freq=update_freq,
-                                      n_step=agent_args.policy.n_step, gamma=agent_args.policy.gamma)
+                                      n_step=n_step, gamma=agent_args.policy.gamma)
         else:
             self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
         # Create envs and dataloaders
