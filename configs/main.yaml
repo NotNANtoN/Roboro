@@ -28,10 +28,12 @@ learner:
   steps_per_batch: 1
   batch_size: 32
   num_workers: 0
-  # size params
+  # buffer params
   warm_start_size: 1000
   buffer_size: 100000
   n_step: 0
+  cer: 0
+  per: 0
 
 
 agent:

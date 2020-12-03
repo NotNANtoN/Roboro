@@ -8,7 +8,7 @@ from torch.optim.optimizer import Optimizer
 from omegaconf import DictConfig
 
 from roboro.agent import Agent
-from roboro.data import RLDataModule, RLBuffer, NStepBuffer
+from roboro.data import RLDataModule, RLBuffer, NStepWrapper, CERWrapper, PERWrapper
 
 
 class Learner(pl.LightningModule):
@@ -43,6 +43,8 @@ class Learner(pl.LightningModule):
                  buffer_size: int = 100000,
                  steps_per_batch: int = 1,
                  n_step: int = 1,
+                 cer: int = 0,
+                 per: int = 0,
 
                  frame_stack: int = 0,
                  frameskip: int = 2,
@@ -55,11 +57,15 @@ class Learner(pl.LightningModule):
         self.save_hyperparameters()
         # Create replay buffer
         update_freq = 0
+        # TODO: add PER, add simplified ERE (bias more recent transitions), add Wrapper that adds last transition
+        self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
+        if per:
+            self.buffer = PERWrapper(self.buffer, beta_start=0.4, alpha=0.6)
         if n_step > 1:
-            self.buffer = NStepBuffer(buffer_size, update_freq=update_freq,
-                                      n_step=n_step, gamma=agent_args.policy.gamma)
-        else:
-            self.buffer = RLBuffer(buffer_size, update_freq=update_freq)
+            self.buffer = NStepWrapper(self.buffer, n_step=n_step, gamma=agent_args.policy.gamma)
+        if cer:
+            self.buffer = CERWrapper(self.buffer)
+        print("Buffer: ", self.buffer)
         # Create envs and dataloaders
         self.datamodule = RLDataModule(self.buffer,
                                        train_env, train_ds,
@@ -161,7 +167,7 @@ class Learner(pl.LightningModule):
         # update target nets, epsilon, etc:
         self.agent.update_self(self.total_steps)
         # update buffer
-        self.buffer.update(extra_info)
+        self.buffer.update(self.total_steps, extra_info)
         # log metrics
         self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log('eps', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
