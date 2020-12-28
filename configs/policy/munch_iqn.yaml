@@ -1,0 +1,17 @@
+# @package _global_
+
+# IQN is currently not compatible with QV or QVMAX
+
+opt:
+  name: adam
+  eps: 0.0003125
+  lr: 0.00005
+
+agent:
+  iqn: 1
+  policy:
+    munchausen: 1
+    tau: 0.03
+    l0: -1
+    alpha: 0.9
+    num_quantiles: 8

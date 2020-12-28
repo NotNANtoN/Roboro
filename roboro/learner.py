@@ -187,10 +187,10 @@ class Learner(pl.LightningModule):
         self.n_evals += 1
         self.mean_val_return = self.mean_val_return + (avg_return - self.mean_val_return) / self.n_evals
 
-        self.log('mean_val', self.mean_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log('mean', self.mean_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         if avg_return > self.max_val_return:
             self.max_val_return = avg_return
-        self.log('max_val', self.max_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log('max', self.max_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def validation_step(self, batch, *args, **kwargs):
         if batch is not None:

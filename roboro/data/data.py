@@ -41,15 +41,6 @@ class RLDataModule(pl.LightningDataModule):
         #if val_ds is not None:
         #    self.val_dl = create_dl(val_ds)
 
-    def collate(self, batch):
-        print(batch)
-        print(len(batch))
-        quit()
-
-    def _dataloader(self, ds) -> DataLoader:
-        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=self.num_workers)
-        #, collate_fn=self.collate)
-
     def train_dataloader(self) -> DataLoader:
         """Get train loader"""
         # TODO: combine replay buffer dataloader with expert data dataloader
@@ -62,6 +53,15 @@ class RLDataModule(pl.LightningDataModule):
     def test_dataloader(self) -> DataLoader:
         """Get test loader"""
         return self.test_dl
+
+    def collate(self, batch):
+        print(batch)
+        print(len(batch))
+        quit()
+
+    def _dataloader(self, ds) -> DataLoader:
+        return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, num_workers=self.num_workers)
+        #, collate_fn=self.collate)
 
     def get_train_env(self):
         return self.train_env, self.train_obs
