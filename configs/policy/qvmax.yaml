@@ -1,4 +1,4 @@
 # @package _global_
 
 agent:
-  qv: 1
+  qvmax: 1
