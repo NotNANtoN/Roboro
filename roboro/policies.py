@@ -29,6 +29,11 @@ def calculate_huber_loss(td_errors, k=1.0):
 
 class Policy(torch.nn.Module):
     def __init__(self, gamma):
+        """ Policy superclass that deals with basic and repetitiv tasks such as updating the target networks or
+         calculating the gamma values.
+
+         Subclasses need to define self.nets and self.target_nets such that the target nets are updated properly.
+         """
         super().__init__()
         self.gamma = gamma
         self.nets = []
@@ -197,7 +202,7 @@ class QV(Policy):
     train the Q net using the V net.
     """
     def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
-        super().__init__()
+        super().__init__(gamma)
         self.v = V(obs_shape, gamma, net=net)
         self.q = Q(obs_shape, act_shape, gamma, double_q, net=net)
         # TODO: if dueling is set, try to incorporate the V net into the Q net
