@@ -44,6 +44,8 @@ agent:
   iqn: 0
   soft_q: 0
   munch_q: 0
+  int_ens: 0
+  rem: 0
   # learn alg params
   eps_start: 0.1
   # feature extraction net params

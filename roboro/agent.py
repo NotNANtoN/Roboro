@@ -25,6 +25,8 @@ class Agent(torch.nn.Module):
                  iqn: bool = False,
                  soft_q: bool = False,
                  munch_q: bool = False,
+                 int_ens: bool = False,
+                 rem: bool = False,
 
                  eps_start: float = 0.1,
                  target_net_hard_steps: int = 1000,
@@ -53,9 +55,9 @@ class Agent(torch.nn.Module):
             else MLP(obs_shape[0], feat_layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = create_policy(obs_feature_shape, self.act_shape, double_q=double_q,
+        self.policy = create_policy(obs_feature_shape, self.act_shape, double_q=double_q, rem=rem, int_ens=int_ens,
                                          use_qv=qv, use_qvmax=qvmax, iqn=iqn, use_soft_q=soft_q, use_munch_q=munch_q,
-                                         policy_kwargs=policy)
+                                         policy_kwargs=policy, )
         print("Policy: ", self.policy)
 
     def update_self(self, steps):
