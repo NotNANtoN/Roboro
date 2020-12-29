@@ -6,6 +6,28 @@ def create_wrapper(baseclass, superclass):
     return type(name, (baseclass, superclass), dict(vars(baseclass)))
 
 
+def polyak_update(net, target_net, factor):
+    for target_param, param in zip(target_net.parameters(), net.parameters()):
+        target_param.data.copy_(factor * target_param.data + param.data * (1.0 - factor))
+
+
+def copy_weights(source_net, target_net):
+    target_net.load_state_dict(source_net.state_dict())
+
+
+def freeze_params(module: torch.nn.Module):
+    for param in module.parameters():
+        param.requires_grad = False
+
+
+def calculate_huber_loss(td_errors, k=1.0):
+    """Calculate huber loss element-wisely depending on kappa k.
+    """
+    loss = torch.where(td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k))
+    # assert loss.shape == (td_errors.shape[0], 8, 8), "huber loss has wrong shape"
+    return loss
+
+
 def weight_init(layers):
     for layer in layers:
         torch.nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')

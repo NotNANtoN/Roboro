@@ -2,57 +2,44 @@ import torch
 from omegaconf import DictConfig
 
 from roboro.networks import MLP, IQNNet
-from roboro.utils import create_wrapper
+from roboro.utils import create_wrapper, polyak_update, copy_weights, freeze_params, calculate_huber_loss
 
 
-def polyak_update(net, target_net, factor):
-    for target_param, param in zip(target_net.parameters(), net.parameters()):
-        target_param.data.copy_(factor * target_param.data + param.data * (1.0 - factor))
-
-
-def copy_weights(source_net, target_net):
-    target_net.load_state_dict(source_net.state_dict())
-
-
-def freeze_params(module: torch.nn.Module):
-    for param in module.parameters():
-        param.requires_grad = False
-
-
-def calculate_huber_loss(td_errors, k=1.0):
-    """
-    Calculate huber loss element-wisely depending on kappa k.
-    """
-    loss = torch.where(td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k))
-    # assert loss.shape == (td_errors.shape[0], 8, 8), "huber loss has wrong shape"
-    return loss
-
-
-def create_q(*args, double_q=False, soft_q=False, munch_q=False, iqn=False, **policy_kwargs):
+def create_q(*q_args, double_q=False, soft_q=False, munch_q=False, iqn=False, **policy_kwargs):
     PolicyClass = Q
     if iqn:
+        PolicyClass = create_wrapper(SoftQ, PolicyClass)
+        PolicyClass = create_wrapper(MunchQ, PolicyClass)
         PolicyClass = create_wrapper(IQNQ, PolicyClass)
-        #policy_kwargs.update({})
-    if double_q:
+    elif double_q:
         PolicyClass = create_wrapper(DoubleQ, PolicyClass)
     elif soft_q or munch_q:
         PolicyClass = create_wrapper(SoftQ, PolicyClass)
         if munch_q:
             PolicyClass = create_wrapper(MunchQ, PolicyClass)
-    policy = PolicyClass(*args, **policy_kwargs)
-    return policy
+    q = PolicyClass(*q_args, **policy_kwargs)
+    return q
+
+
+def create_v(*v_args, **policy_kwargs):
+    PolicyClass = V
+    v = PolicyClass(*v_args, **policy_kwargs)
+    return v
 
 
 def create_policy(obs_size, act_size, policy_kwargs,
                   double_q=False, use_qv=False, use_qvmax=False, iqn=False, use_soft_q=False, use_munch_q=False):
-    policy_args = (obs_size, act_size)
-    if use_qv:
-        policy = QV(*policy_args)
-    elif use_qvmax:
-        policy = QVMax(*policy_args)
+    q_args = (obs_size, act_size)
+    q_creation_kwargs = {'double_q': double_q, 'iqn': iqn, 'soft_q': use_soft_q, 'munch_q': use_munch_q}
+    if use_qv or use_qvmax:
+        v_args = (obs_size,)
+        v_creation_kwargs = {}
+        if use_qv:
+            policy = QV(q_args, q_creation_kwargs, v_args, v_creation_kwargs, **policy_kwargs)
+        else:
+            policy = QVMax(q_args, q_creation_kwargs, v_args, v_creation_kwargs, **policy_kwargs)
     else:
-        policy = create_q(obs_size, act_size, double_q=double_q, soft_q=use_soft_q, munch_q=use_munch_q, iqn=iqn,
-                          **policy_kwargs)
+        policy = create_q(*q_args, **q_creation_kwargs, **policy_kwargs)
     return policy
 
 
@@ -95,6 +82,20 @@ class Policy(torch.nn.Module):
         raise NotImplementedError
 
 
+class MultiNetPolicy(Policy):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.policies = []
+
+    def update_target_nets_hard(self):
+        for pol in self.policies:
+            pol.update_target_nets_hard()
+
+    def update_target_nets_soft(self, val):
+        for pol in self.policies:
+            pol.update_target_nets_soft(val)
+
+
 class Q(Policy):
     def __init__(self, obs_size, act_size, net: DictConfig = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -133,7 +134,7 @@ class Q(Policy):
         return net(next_obs)
 
     def next_state_val(self, next_obs):
-        """Calculate the value of the next state via the target network.
+        """Calculate the value of the next obs via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
         q_vals_next = self.q_pred_next_state(next_obs, self.q_net_target)
         q_vals_next = torch.max(q_vals_next, dim=1)[0]
@@ -149,10 +150,10 @@ class Q(Policy):
 
 class DoubleQ(Q):
     def __str__(self):
-        return f'DoubleQ <{super().__str__()}>'
+        return f'Double <{super().__str__()}>'
 
     def next_state_val(self, next_obs):
-        """Calculate the value of the next state according to the double Q learning rule.
+        """Calculate the value of the next obs according to the double Q learning rule.
         It decouples the action selection (done via online network) and the action evaluation (done via target network).
         """
         # Next state action selection
@@ -173,7 +174,7 @@ class SoftQ(Q):
         self.l0 = l0
 
     def __str__(self):
-        return f'SoftQ_{self.tau}_{self.l0} <{super().__str__()}>'
+        return f'Soft_{self.tau}_{self.l0} <{super().__str__()}>'
 
     @torch.no_grad()
     def q_pred_next_state(self, next_obs, net):
@@ -186,11 +187,14 @@ class SoftQ(Q):
         return torch.clamp(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
 
 
-class MunchQ:
+class MunchQ(SoftQ):
     def __init__(self, *args, alpha=0.9, **kwargs):
         """Munchausen Q-learning"""
         super().__init__(*args, **kwargs)
         self.alpha = alpha
+
+    def __str__(self):
+        return f'Munchausen_{self.alpha} <{super().__str__()}>'
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
@@ -208,6 +212,7 @@ class V(Policy):
         v_out_size = 1
         net = dict(net)
         del net["dueling"]
+        print(obs_size, net)
         self.v_net = MLP(obs_size, v_out_size, **net)
         self.v_net_target = MLP(obs_size, v_out_size, **net)
         freeze_params(self.v_net_target)
@@ -228,32 +233,31 @@ class V(Policy):
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        v_vals_next = self._calc_next_obs_vals(next_obs)
+        v_vals_next = self.next_state_val(next_obs)
         gammas = self._calc_gammas(done_flags, extra_info)
         targets = rewards + gammas * v_vals_next
         return targets
 
     @torch.no_grad()
-    def _calc_next_obs_vals(self, next_obs):
+    def next_state_val(self, next_obs):
         """If a done_flag is set the next obs val is 0, else calculate it"""
         v_vals_next = self.v_net_target(next_obs)
         return v_vals_next.squeeze()
 
 
-class QV(Policy):
+class QV(MultiNetPolicy):
     """Train a state-action value network (Q) network and an additional state value network (V) and
     train the Q net using the V net.
     """
-    def __init__(self, obs_shape, act_shape, gamma=0.99, net: DictConfig = None):
+    def __init__(self, q_args, q_creation_kwargs, v_args, v_creation_kwargs, **policy_kwargs):
         super().__init__()
-        # TODO: instead of using V and Q here, we need to define a constructor for these networks such that SoftQ, IQN,
-        #  Ensembles etc can be also used in QV-learning
-        self.v = V(obs_shape, gamma, net=net)
-        self.q = Q(obs_shape, act_shape, gamma, net=net)
+        self.v = create_v(*v_args, **v_creation_kwargs, **policy_kwargs)
+        self.q = create_q(*q_args, **q_creation_kwargs, **policy_kwargs)
         # TODO: if dueling is set, try to incorporate the V net into the Q net
-        # Create net lists to update target nets
-        self.nets = [self.q.q_net, self.v.v_net]
-        self.target_nets = [self.q.q_net_target, self.v.v_net_target]
+        self.policies = [self.v, self.q]
+
+    def __str__(self):
+        return f'QV <{str(self.q)}>'
 
     def forward(self, obs):
         return self.q(obs)
@@ -272,6 +276,9 @@ class QV(Policy):
 
 class QVMax(QV):
     """QVMax is an off-policy variant of QV. The V-net is trained by using the Q-net and vice versa."""
+    def __str__(self):
+        return f'QVMax <{str(self.q)}>'
+
     def calc_loss(self, *loss_args):
         q_target = self.q.calc_target_val(*loss_args)
         v_target = self.v.calc_target_val(*loss_args)
@@ -312,18 +319,25 @@ class IQNQ(SoftQ):
         self.nets = [self.q_net]
         self.target_nets = [self.q_net_target]
 
+    def __str__(self):
+        return f'IQN <{super().__str__()}>'
+
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
         batch_size = obs.shape[0]
         rewards = rewards.unsqueeze(-1)
         actions = actions.unsqueeze(-1)
         done_flags = done_flags.unsqueeze(-1).unsqueeze(-1)
         # Calc target vals
-        q_targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+        if targets is None:
+            q_targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+        else:
+            q_targets = targets
         # Get expected Q values from local model
         q_expected, taus = self._get_q_preds(obs, actions)
         # Quantile Huber loss
         td_error = q_targets - q_expected
-        assert td_error.shape == (batch_size, self.num_quantiles, self.num_quantiles), "wrong td error shape"
+        assert td_error.shape == (batch_size, self.num_quantiles, self.num_quantiles),\
+            f'Wrong td error shape: {td_error.shape}. target: {q_targets.shape}. expected: {q_expected.shape}'
         huber_l = calculate_huber_loss(td_error, 1.0)
         quantil_l = abs(taus - (td_error.detach() < 0).float()) * huber_l / 1.0
         # loss = quantil_l.sum(dim=1).mean(dim=1, keepdim=True) * weights # FOR PER!
@@ -335,7 +349,7 @@ class IQNQ(SoftQ):
         batch_size = obs.shape[0]
         q_quants_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
         exp_q_next = q_quants_next.mean(dim=1)
-        gammas = self._calc_gammas(done_flags, extra_info).unsqueeze(-1).unsqueeze(-1)
+        gammas = self._calc_gammas(done_flags, extra_info)
         if not self.munchausen:
             # Get max predicted Q values (for next states) from target model
             action_idx = torch.argmax(exp_q_next, dim=1, keepdim=True)
@@ -345,6 +359,8 @@ class IQNQ(SoftQ):
             q_targets_next = q_quants_next.gather(dim=2, index=action_idx).transpose(1, 2)
             # Compute Q targets for current states
             q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next)
+            assert q_targets.shape == (batch_size, 1, self.num_quantiles), \
+                f"Wrong target shape: {q_targets.shape}"
         else:
             # calculate log-pi
             tau_log_pi_next = self._calc_entropy(exp_q_next).unsqueeze(1)
