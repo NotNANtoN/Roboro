@@ -32,6 +32,10 @@ class BufferWrapper(torch.utils.data.IterableDataset):
         return str(self)
 
 
+class PER(RLBuffer):
+    pass
+
+
 class PERWrapper(BufferWrapper):
     def __init__(self, buffer, max_priority=1.0, running_avg=0.0, beta_start=0.4, alpha=0.6):
         super().__init__(buffer)
@@ -111,6 +115,45 @@ class PERWrapper(BufferWrapper):
         # TODO: also call self.calc_and_save_max_weight here, assuming it is done once per sampling
 
 
+class NStep(RLBuffer):
+    def __init__(self, *args, n_step=0, gamma=0.99, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.n_step = n_step
+        self.gamma = gamma
+        self.n_step_used = None
+
+    def __str__(self):
+        return f'NStep{self.n_step} <{super().__str__()}>'
+
+    def __getitem__(self, idx):
+        out = super().__getitem__(idx)
+        extra_info = out[-1]
+        assert self.n_step_used is not None, "get_reward() was not called, so number of steps per sample not known!"
+        extra_info["n_step"] = self.n_step_used
+        self.n_step_used = None
+        return out
+
+    def get_reward(self, idx):
+        """ For n-step add rewards of discounted next n steps to current reward"""
+        n_step_reward = 0
+        count = 0
+        for count, step_reward in enumerate(self.rewards[idx: idx + self.n_step]):
+            n_step_reward += step_reward * self.gamma ** count
+            if self.dones[idx + count]:
+                break
+        self.n_step_used = count + 1
+        return n_step_reward
+
+    def get_next_state(self, idx, state):
+        count = 0
+        done_slice = self.dones[idx: idx + self.n_step]
+        for count, done in enumerate(done_slice):
+            if done:
+                break
+        n_step_idx = idx + count
+        return super().get_next_state(n_step_idx, state)
+
+
 class NStepWrapper(BufferWrapper):
     def __init__(self, buffer, n_step=0, gamma=0.99):
         super().__init__(buffer)
@@ -144,6 +187,27 @@ class NStepWrapper(BufferWrapper):
                 break
         n_step_idx = idx + count
         return super().get_next_state(n_step_idx, state)
+
+
+class CER(RLBuffer):
+    def __init__(self, *args, **kwargs):
+        """Returns the most recent experience tuple once per batch to bias new experiences slightly"""
+        super().__init__(*args, **kwargs)
+        self.new_batch = True
+
+    def __str__(self):
+        return f'CER <{super().__str__()}>'
+
+    def __getitem__(self, idx):
+        # overwrite index to be the most recently added index of the buffer at the start of a new batch
+        if self.new_batch:
+            idx = self.size() - 1
+            self.new_batch = False
+        return super().__getitem__(idx)
+
+    def update(self, steps, extra_info):
+        self.new_batch = True
+        return super().update(steps, extra_info)
 
 
 class CERWrapper(BufferWrapper):

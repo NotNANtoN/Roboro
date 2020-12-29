@@ -2,6 +2,7 @@ import torch
 from omegaconf import DictConfig
 
 from roboro.networks import MLP, IQNNet
+from roboro.utils import create_wrapper
 
 
 def polyak_update(net, target_net, factor):
@@ -27,8 +28,36 @@ def calculate_huber_loss(td_errors, k=1.0):
     return loss
 
 
+def create_q(*args, double_q=False, soft_q=False, munch_q=False, iqn=False, **policy_kwargs):
+    PolicyClass = Q
+    if iqn:
+        PolicyClass = create_wrapper(IQNQ, PolicyClass)
+        #policy_kwargs.update({})
+    if double_q:
+        PolicyClass = create_wrapper(DoubleQ, PolicyClass)
+    elif soft_q or munch_q:
+        PolicyClass = create_wrapper(SoftQ, PolicyClass)
+        if munch_q:
+            PolicyClass = create_wrapper(MunchQ, PolicyClass)
+    policy = PolicyClass(*args, **policy_kwargs)
+    return policy
+
+
+def create_policy(obs_size, act_size, policy_kwargs,
+                  double_q=False, use_qv=False, use_qvmax=False, iqn=False, use_soft_q=False, use_munch_q=False):
+    if use_qv:
+        policy = QV()
+    elif use_qvmax:
+        policy = QVMax()
+    else:
+        policy = create_q(obs_size, act_size, double_q=double_q, soft_q=use_soft_q, munch_q=use_munch_q, iqn=iqn,
+                          **policy_kwargs)
+    return policy
+
+
+
 class Policy(torch.nn.Module):
-    def __init__(self, gamma):
+    def __init__(self, gamma=None):
         """ Policy superclass that deals with basic and repetitiv tasks such as updating the target networks or
          calculating the gamma values.
 
@@ -39,14 +68,17 @@ class Policy(torch.nn.Module):
         self.nets = []
         self.target_nets = []
 
+    def __str__(self):
+        return f'Policy_{self.gamma}'
+
     def _calc_gammas(self, done_flags, extra_info):
         """Apply the discount factor. If a done flag is set we discount by 0."""
-        gammas = (~done_flags.unsqueeze(-1)).float()
+        gammas = (~done_flags).float()
         if "n_step" in extra_info:
             gammas *= self.gamma ** extra_info["n_step"]
         else:
             gammas *= self.gamma
-        return gammas.squeeze()
+        return gammas
 
     def update_target_nets_hard(self):
         for net, target_net in zip(self.nets, self.target_nets):
@@ -56,22 +88,25 @@ class Policy(torch.nn.Module):
         for net, target_net in zip(self.nets, self.target_nets):
             polyak_update(net, target_net, val)
 
+    def forward(self, obs):
+        raise NotImplementedError
+
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
+        raise NotImplementedError
+
 
 class Q(Policy):
-    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
-        super().__init__(gamma)
-        self.gamma = gamma
-        self.q_net = MLP(obs_shape, act_shape, **net)
-        self.q_net_target = MLP(obs_shape, act_shape, **net)
+    def __init__(self, obs_size, act_size, net: DictConfig = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.q_net = MLP(obs_size, act_size, **net)
+        self.q_net_target = MLP(obs_size, act_size, **net)
         freeze_params(self.q_net_target)
         # Create net lists to update target nets
         self.nets = [self.q_net]
         self.target_nets = [self.q_net_target]
-        # Decide on using double Q-learning by choosing which method to use to calc next state value:
-        if double_q:
-            self._next_state_func = self._calc_next_obs_q_vals_double_q
-        else:
-            self._next_state_func = self._calc_next_obs_q_vals
+
+    def __str__(self):
+        return f'Q <{super().__str__()}>'
 
     def forward(self, obs):
         return self.q_net(obs)
@@ -86,42 +121,47 @@ class Q(Policy):
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_vals_next = self._next_state_func(next_obs)
+        q_vals_next = self.next_state_val(next_obs)
         assert q_vals_next.shape == rewards.shape
         gammas = self._calc_gammas(done_flags, extra_info)
         targets = rewards + gammas * q_vals_next
         return targets
 
     @torch.no_grad()
-    def _q_pred_next_state(self, next_obs, net):
-        """ Specified in function to be potentially overriden by subclasses"""
+    def q_pred_next_state(self, next_obs, net):
+        """ Specified in extra method to be potentially overridden by subclasses"""
         return net(next_obs)
 
-    def _calc_next_obs_q_vals(self, next_obs):
+    def next_state_val(self, next_obs):
         """Calculate the value of the next state via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
-        q_vals_next = self._q_pred_next_state(next_obs, self.q_net_target)
+        q_vals_next = self.q_pred_next_state(next_obs, self.q_net_target)
         q_vals_next = torch.max(q_vals_next, dim=1)[0]
-        return q_vals_next
-        
-    def _calc_next_obs_q_vals_double_q(self, next_obs):
-        """Calculate the value of the next state according to the double Q learning rule.
-        It decouples the action selection (done via online network) and the action evaluation (done via target network).
-        """
-        # Next state action selection
-        q_vals_next_online_net = self._q_pred_next_state(next_obs, self.q_net)
-        max_idcs = torch.max(q_vals_next_online_net, dim=1)[1]
-        # Next state action evaluation
-        q_vals_next_target_net = self._q_pred_next_state(next_obs, self.q_net_target)
-        q_vals_next = q_vals_next_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
         return q_vals_next
 
     def _get_q_preds(self, obs, actions):
         """Get Q-value predictions for current obs based on actions"""
         pred_q_vals = self.q_net(obs)
-        # TODO: isn't here a better method than this stupid gather?
+        # TODO: isn't there a better method than this stupid gather?
         chosen_action_q_vals = pred_q_vals.gather(dim=1, index=actions.unsqueeze(1)).squeeze()
         return chosen_action_q_vals
+
+
+class DoubleQ(Q):
+    def __str__(self):
+        return f'DoubleQ <{super().__str__()}>'
+
+    def next_state_val(self, next_obs):
+        """Calculate the value of the next state according to the double Q learning rule.
+        It decouples the action selection (done via online network) and the action evaluation (done via target network).
+        """
+        # Next state action selection
+        q_vals_next_online_net = self.q_pred_next_state(next_obs, self.q_net)
+        max_idcs = torch.max(q_vals_next_online_net, dim=1)[1]
+        # Next state action evaluation
+        q_vals_next_target_net = self.q_pred_next_state(next_obs, self.q_net_target)
+        q_vals_next = q_vals_next_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
+        return q_vals_next
 
 
 class SoftQ(Q):
@@ -132,9 +172,12 @@ class SoftQ(Q):
         self.tau = tau
         self.l0 = l0
 
+    def __str__(self):
+        return f'SoftQ_{self.tau}_{self.l0} <{super().__str__()}>'
+
     @torch.no_grad()
-    def _q_pred_next_state(self, next_obs, net):
-        next_state_q_vals = super()._q_pred_next_state(next_obs, net)
+    def q_pred_next_state(self, next_obs, net):
+        next_state_q_vals = super().q_pred_next_state(next_obs, net)
         next_state_policy_distr = torch.softmax(next_state_q_vals, dim=1)
         next_state_preds = next_state_q_vals - self._calc_entropy(next_state_q_vals)
         return (next_state_policy_distr * next_state_preds).mean(dim=1).unsqueeze(-1)
@@ -143,7 +186,7 @@ class SoftQ(Q):
         return torch.clamp(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
 
 
-class MunchQ(SoftQ):
+class MunchQ:
     def __init__(self, *args, alpha=0.9, **kwargs):
         """Munchausen Q-learning"""
         super().__init__(*args, **kwargs)
@@ -160,13 +203,13 @@ class MunchQ(SoftQ):
 
 class V(Policy):
     """A state value network"""
-    def __init__(self, obs_shape, gamma=0.99, net: DictConfig = None):
-        super().__init__(gamma)
+    def __init__(self, obs_size, net: DictConfig = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         v_out_size = 1
         net = dict(net)
         del net["dueling"]
-        self.v_net = MLP(obs_shape, v_out_size, **net)
-        self.v_net_target = MLP(obs_shape, v_out_size, **net)
+        self.v_net = MLP(obs_size, v_out_size, **net)
+        self.v_net_target = MLP(obs_size, v_out_size, **net)
         freeze_params(self.v_net_target)
         # Create net lists to update target nets
         self.nets = [self.v_net]
@@ -201,10 +244,12 @@ class QV(Policy):
     """Train a state-action value network (Q) network and an additional state value network (V) and
     train the Q net using the V net.
     """
-    def __init__(self, obs_shape, act_shape, gamma=0.99, double_q=False, net: DictConfig = None):
-        super().__init__(gamma)
+    def __init__(self, obs_shape, act_shape, gamma=0.99, net: DictConfig = None):
+        super().__init__()
+        # TODO: instead of using V and Q here, we need to define a constructor for these networks such that SoftQ, IQN,
+        #  Ensembles etc can be also used in QV-learning
         self.v = V(obs_shape, gamma, net=net)
-        self.q = Q(obs_shape, act_shape, gamma, double_q, net=net)
+        self.q = Q(obs_shape, act_shape, gamma, net=net)
         # TODO: if dueling is set, try to incorporate the V net into the Q net
         # Create net lists to update target nets
         self.nets = [self.q.q_net, self.v.v_net]
@@ -234,7 +279,7 @@ class QVMax(QV):
         return loss
 
 
-class IQN(SoftQ):
+class IQNQ(SoftQ):
     """
     IQN Agent that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
     """
@@ -332,12 +377,56 @@ class IQN(SoftQ):
         return q_expected, taus
 
 
-class Ensemble(torch.nn.Module):
-    def __init__(self, obs_shape, act_shape, PolicyClass):
-        super().__init__(obs_shape)
-        self.policies = [PolicyClass]
+class Ensemble(Policy):
+    def __init__(self, PolicyClass, size=1, *policy_args, **policy_kwargs):
+        super().__init__()
+        self.size = size
+        self.policies = [PolicyClass(*policy_args, **policy_kwargs) for _ in range(size)]
+        self.nets = []
+        self.target_nets = []
+        for pol in self.policies:
+            self.nets += pol.nets
+            self.target_nets += pol.target_nets
+
+    def forward(self, obs):
+        preds = torch.stack([pol(obs) for pol in self.policies])
+        mean_pred = torch.mean(preds, dim=0)
+        return mean_pred
 
     def calc_loss(self, *args):
         losses = torch.stack([policy.calc_loss(*args) for policy in self.policies])
         loss = losses.mean()
         return loss
+
+
+class REM(Ensemble):
+    # TODO: This REM Ensemble most likely needs to be wrapped around the Q or V networks if used in QV,
+    #  instead of wrapped around QV
+    def __init__(self, *args, **kwargs):
+        """Implements the Random Ensemble Mixture (REM)."""
+        super().__init__(*args, **kwargs)
+
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+        bs = obs.shape[0]
+        alphas = torch.rand(bs)
+        alphas /= alphas.sum()
+
+        # calc preds
+        preds = torch.stack([pol(obs) for pol in self.policies])
+        pred = (preds * alphas).sum(dim=0)
+        # calc targets
+        target = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info, alphas)
+
+    @torch.no_grad()
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, alphas):
+        next_vals = torch.stack([pol.next_state_func(next_obs) for pol in self.policies])
+        next_val = (next_vals * alphas).sum(dim=0)
+        assert next_val.shape == rewards.shape
+        gammas = self._calc_gammas(done_flags, extra_info)
+        targets = rewards + gammas * next_val
+        return targets
+
+
+
+
+

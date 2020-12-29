@@ -1,6 +1,5 @@
 import math
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -22,7 +21,7 @@ class DuelingLayer(torch.nn.Module):
     MLP network with duel heads for val and advantage
     """
 
-    def __init__(self, in_size, out_size, **linear_kwargs):
+    def __init__(self, in_size, out_size, v_head=None, **linear_kwargs):
         """
         Args:
             input_shape: observation shape of the environment
@@ -31,7 +30,10 @@ class DuelingLayer(torch.nn.Module):
         """
         super().__init__()
         self.head_adv = create_block(in_size, out_size, **linear_kwargs)
-        self.head_val = create_block(in_size, 1, **linear_kwargs)
+        if v_head is None:
+            self.head_val = create_block(in_size, 1, **linear_kwargs)
+        else:
+            self.head_val = v_head
 
     def forward(self, x):
         """

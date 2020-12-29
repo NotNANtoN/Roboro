@@ -1,11 +1,10 @@
-import argparse
 import random
 
 import torch
 import gym
 from omegaconf import DictConfig
 
-from roboro.policies import Q, SoftQ, MunchQ, QV, QVMax, IQN
+from roboro.policies import create_policy
 from roboro.networks import CNN, MLP
 from roboro.utils import Standardizer
 
@@ -19,23 +18,8 @@ class Agent(torch.nn.Module):
     """ Torch module that creates networks based off environment specifics, that returns actions based off states,
     and that calculates a loss based off an experience tuple
     """
-    @staticmethod
-    def create_policy(obs_size, act_size, policy_args,
-                      use_qv=False, use_qvmax=False, iqn=False, use_soft_q=False, use_munch_q=False):
-        if iqn:
-            return IQN(obs_size, act_size, **policy_args)
-        elif use_qv:
-            return QV(obs_size, act_size, **policy_args)
-        elif use_qvmax:
-            return QVMax(obs_size, act_size, **policy_args)
-        elif use_soft_q:
-            return SoftQ(obs_size, act_size, **policy_args)
-        elif use_munch_q:
-            return MunchQ(obs_size, act_size, **policy_args)
-        else:
-            return Q(obs_size, act_size, **policy_args)
-
     def __init__(self, obs_space, action_space,
+                 double_q: bool = False,
                  qv: bool = False,
                  qvmax: bool = False,
                  iqn: bool = False,
@@ -69,9 +53,10 @@ class Agent(torch.nn.Module):
             else MLP(obs_shape[0], feat_layer_width)
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
-        self.policy = self.create_policy(obs_feature_shape, self.act_shape,
+        self.policy = create_policy(obs_feature_shape, self.act_shape, double_q=double_q,
                                          use_qv=qv, use_qvmax=qvmax, iqn=iqn, use_soft_q=soft_q, use_munch_q=munch_q,
-                                         policy_args=policy)
+                                         policy_kwargs=policy)
+        print("Policy: ", self.policy)
 
     def update_self(self, steps):
         """

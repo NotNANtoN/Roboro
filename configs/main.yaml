@@ -38,6 +38,7 @@ learner:
 
 agent:
   # policy selection
+  double_q: 0
   qv: 0
   qvmax: 0
   iqn: 0

@@ -7,7 +7,7 @@ import torch
 from roboro.utils import apply_to_state
 
 
-class sliceable_deque(deque):
+class SliceableDeque(deque):
     def __getitem__(self, index):
         if isinstance(index, slice):
             return type(self)(itertools.islice(self, index.start,
@@ -18,19 +18,23 @@ class sliceable_deque(deque):
 class RLBuffer(torch.utils.data.IterableDataset):
     def __init__(self, max_size, update_freq=0, n_step=0, gamma=0.99):
         super().__init__()
+        self.max_size = max_size
         self.update_freq = update_freq
         self.n_step = n_step
         self.gamma = gamma
         self.dtype = torch.float32  # can be overridden by trainer to be float16
         # Storage fields
-        self.states = sliceable_deque(maxlen=max_size)
-        self.rewards = sliceable_deque(maxlen=max_size)
-        self.actions = sliceable_deque(maxlen=max_size)
-        self.dones = sliceable_deque(maxlen=max_size)
+        self.states = SliceableDeque(maxlen=max_size)
+        self.rewards = SliceableDeque(maxlen=max_size)
+        self.actions = SliceableDeque(maxlen=max_size)
+        self.dones = SliceableDeque(maxlen=max_size)
         self.extra_info = defaultdict(deque)
 
         # Can bet set from the outside to determine the end of an epoch
         self.should_stop = False
+
+    def __str__(self):
+        return f"RLBuffer[{self.size()}, {self.max_size}]"
 
     def __iter__(self):
         count = 0
@@ -52,7 +56,6 @@ class RLBuffer(torch.utils.data.IterableDataset):
         extra_info["idx"] = idx
         reward = self.get_reward(idx)
         return state, self.actions[idx], reward, done, next_state, extra_info
-
 
     def size(self):
         """Length method that does not override __len__, otherwise pytorch lightning would create a new epoch based on

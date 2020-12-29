@@ -1,6 +1,11 @@
 import torch
 
 
+def create_wrapper(baseclass, superclass):
+    name = f'{str(baseclass)} <{str(superclass)}>'
+    return type(name, (baseclass, superclass), dict(vars(baseclass)))
+
+
 def weight_init(layers):
     for layer in layers:
         torch.nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
