@@ -188,15 +188,18 @@ class InternalEnsemble(Q):
         self.size = size
         obs_size, act_size = args
         net = kwargs['net']
-        self.q_nets = [MLP(obs_size, act_size, **net) for _ in range(size)]
+        self.q_net = None
+        self.q_net_target = None
+        self.q_nets = torch.nn.ModuleList([MLP(obs_size, act_size, **net) for _ in range(size)])
         self.q_nets_target = [MLP(obs_size, act_size, **net) for _ in range(size)]
-        self.policies = self.q_nets
+        self.nets = self.q_nets
+        self.target_nets = self.q_nets_target
 
     def __str__(self):
         return f'IntEns_{self.size} <{super().__str__()}>'
 
     def forward(self, obs):
-        preds = torch.stack([pol(obs) for pol in self.policies])
+        preds = torch.stack([pol(obs) for pol in self.q_nets])
         mean_pred = torch.mean(preds, dim=0)
         return mean_pred
 
