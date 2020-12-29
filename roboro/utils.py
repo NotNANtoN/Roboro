@@ -40,12 +40,6 @@ class Standardizer(torch.nn.Module):
 
     def norm(self, obs):
         standardized_obs = (obs - self.mean) / self.std
-        # if np.isnan(standardized_obs).sum():
-        #    print(obs)
-        #    print(standardized_obs)
-        #    print(self.mean)
-        #    print(self.std)
-        #    quit()
         return standardized_obs
 
     def denorm(self, obs):

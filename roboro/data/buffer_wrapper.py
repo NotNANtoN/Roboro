@@ -1,42 +1,32 @@
 import random
 
-import torch
-
 from roboro.data.replay_buffer import RLBuffer
 from roboro.data.segment_tree import SumSegmentTree, MinSegmentTree
+from roboro.utils import create_wrapper
 
 
-class BufferWrapper(torch.utils.data.IterableDataset):
-    def __init__(self, buffer: RLBuffer):
-        super().__init__()
-        self.buffer = buffer
-
-    def __getattr__(self, attr):
-        return getattr(self.buffer, attr)
-
-    def __iter__(self):
-        return self.buffer.__iter__()
-
-    @property
-    def should_stop(self):
-        return self.buffer.should_stop
-
-    @should_stop.setter
-    def should_stop(self, val):
-        self.buffer.should_stop = val
-
-    def __str__(self):
-        return f'<{type(self).__name__}{self.buffer}>'
-
-    def __repr__(self):
-        return str(self)
+def create_buffer(buffer_size, n_step, per, cer, gamma):
+    # TODO: add PER, add simplified ERE (bias more recent transitions)
+    # Create replay buffer
+    update_freq = 0
+    buffer_args = [buffer_size]
+    buffer_kwargs = {'update_freq': update_freq}
+    BufferClass = RLBuffer
+    if per:
+        BufferClass = create_wrapper(PER, BufferClass)
+        buffer_kwargs.update({'beta_start': 0.4,
+                              'alpha': 0.6})
+    if n_step > 1:
+        BufferClass = create_wrapper(NStep, BufferClass)
+        buffer_kwargs.update({'n_step': n_step,
+                              'gamma': gamma})
+    if cer:
+        BufferClass = create_wrapper(CER, BufferClass)
+    buffer = BufferClass(*buffer_args, **buffer_kwargs)
+    return buffer
 
 
 class PER(RLBuffer):
-    pass
-
-
-class PERWrapper(BufferWrapper):
     def __init__(self, buffer, max_priority=1.0, running_avg=0.0, beta_start=0.4, alpha=0.6):
         super().__init__(buffer)
         self.alpha = alpha
@@ -154,41 +144,6 @@ class NStep(RLBuffer):
         return super().get_next_state(n_step_idx, state)
 
 
-class NStepWrapper(BufferWrapper):
-    def __init__(self, buffer, n_step=0, gamma=0.99):
-        super().__init__(buffer)
-        self.n_step = n_step
-        self.gamma = gamma
-        self.n_step_used = None
-
-    def __getitem__(self, idx):
-        out = super().__getitem__(idx)
-        extra_info = out[-1]
-        assert self.n_step_used is not None, "get_reward() was not called, so number of steps per sample not known!"
-        extra_info["n_step"] = self.n_step_used
-        self.n_step_used = None
-        return out
-
-    def get_reward(self, idx):
-        """ For n-step add rewards of discounted next n steps to current reward"""
-        n_step_reward = 0
-        for count, step_reward in enumerate(self.rewards[idx: idx + self.n_step]):
-            n_step_reward += step_reward * self.gamma ** count
-            if self.dones[idx + count]:
-                break
-        self.n_step_used = count + 1
-        return n_step_reward
-
-    def get_next_state(self, idx, state):
-        count = 0
-        done_slice = self.dones[idx: idx + self.n_step]
-        for count, done in enumerate(done_slice):
-            if done:
-                break
-        n_step_idx = idx + count
-        return super().get_next_state(n_step_idx, state)
-
-
 class CER(RLBuffer):
     def __init__(self, *args, **kwargs):
         """Returns the most recent experience tuple once per batch to bias new experiences slightly"""
@@ -208,55 +163,3 @@ class CER(RLBuffer):
     def update(self, steps, extra_info):
         self.new_batch = True
         return super().update(steps, extra_info)
-
-
-class CERWrapper(BufferWrapper):
-    def __init__(self, buffer):
-        """Returns the most recent experience tuple once per batch to bias new experiences slightly"""
-        super().__init__(buffer)
-        self.new_batch = True
-
-    def __getitem__(self, idx):
-        # overwrite index to be the most recently added index of the buffer at the start of a new batch
-        if self.new_batch:
-            idx = self.buffer.size() - 1
-            self.new_batch = False
-        return self.buffer[idx]
-
-    def update(self, steps, extra_info):
-        self.new_batch = True
-        return self.buffer.update(steps, extra_info)
-
-
-class CERWrapperOld(BufferWrapper):
-    def __init__(self, buffer):
-        super().__init__(buffer)
-        self.old_loader = self.buffer.construct_loader
-        self.buffer.construct_loader = lambda data, batch, collate: self.old_loader(data, batch - 1, self.collate_batch)
-
-        self.update_freq = buffer.data.update_freq // buffer.batch_size * buffer.workers
-        self.buffer.stop_iteration_functions.append(self.reset_idx)
-        self.count = 1
-
-        # Create new dataloader with a batch size reduced by 1
-        # self.construct_loader(buffer.data, buffer.batch_size, self.collate_batch)
-
-    def reset_idx(self):
-        self.count = 1
-
-    def collate_batch(self, batch):
-        # Adds the most recent (as recent as possible) transition to the batch
-        workers = self.buffer.workers
-        idx = self.buffer.data.get_last_transition_idx()
-        # If we have multiple workers we need to assign a different idx per worker id
-        # Also we need to count until when the buffer will be updated with new transitions:
-        # this influences the CER idx
-        if workers > 0:
-            id_ = torch.utils.data.get_worker_info().id
-            idx = self.buffer.data.get_last_transition_idx()
-            subtract = self.update_freq * workers
-            idx = min(idx - subtract + id_ + self.count * workers, idx)
-            idx = max(idx, 0)
-            self.count += 1
-        batch.append(self.data[idx])
-        return self.buffer.collate_batch(batch)

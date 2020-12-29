@@ -7,9 +7,8 @@ import torch.optim as optim
 from torch.optim.optimizer import Optimizer
 from omegaconf import DictConfig
 
-from roboro.utils import create_wrapper
 from roboro.agent import Agent
-from roboro.data import RLDataModule, RLBuffer, NStepWrapper, CERWrapper, PERWrapper, CER, PER, NStep
+from roboro.data import RLDataModule, create_buffer
 
 
 class Learner(pl.LightningModule):
@@ -27,44 +26,6 @@ class Learner(pl.LightningModule):
     Note:
         Currently only supports CPU and single GPU training with `distributed_backend=dp`
     """
-    @staticmethod
-    def create_buffer(buffer_size, n_step, per, cer, gamma):
-        # TODO: add PER, add simplified ERE (bias more recent transitions)
-        # Create replay buffer
-        update_freq = 0
-        buffer_args = [buffer_size]
-        buffer_kwargs = {'update_freq': update_freq}
-        BufferClass = RLBuffer
-        # buffer = RLBuffer(buffer_size, update_freq=update_freq)
-        if per:
-            BufferClass = create_wrapper(PER, BufferClass)
-            buffer_kwargs.update({'beta_start': 0.4,
-                                  'alpha': 0.6})
-        if n_step > 1:
-            BufferClass = create_wrapper(NStep, BufferClass)
-            buffer_kwargs.update({'n_step': n_step,
-                                  'gamma': gamma})
-        if cer:
-            BufferClass = create_wrapper(CER, BufferClass)
-        buffer = BufferClass(*buffer_args, **buffer_kwargs)
-        return buffer
-
-    @staticmethod
-    def create_buffer_old(buffer_size, n_step, per, cer, gamma):
-        # TODO: add PER, add simplified ERE (bias more recent transitions)
-        # Create replay buffer
-        update_freq = 0
-        buffer_args = (buffer_size,)
-        buffer_kwargs = {'update_freq': update_freq}
-        buffer = RLBuffer(*buffer_args, **buffer_kwargs)
-        if per:
-            buffer = PERWrapper(buffer, beta_start=0.4, alpha=0.6)
-        if n_step > 1:
-            buffer = NStepWrapper(buffer, n_step=n_step, gamma=gamma)
-        if cer:
-            buffer = CERWrapper(buffer)
-        return buffer
-
     def __init__(self,
                  steps: int = 100000,
                  train_env: str = None,
@@ -94,7 +55,7 @@ class Learner(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         # Create replay buffer
-        self.buffer = self.create_buffer(buffer_size, n_step, per, cer, agent_args.policy.gamma)
+        self.buffer = create_buffer(buffer_size, n_step, per, cer, agent_args.policy.gamma)
         print("Buffer: ", self.buffer)
         # Create envs and dataloaders
         self.datamodule = RLDataModule(self.buffer,

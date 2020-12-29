@@ -45,15 +45,15 @@ def create_q(*args, double_q=False, soft_q=False, munch_q=False, iqn=False, **po
 
 def create_policy(obs_size, act_size, policy_kwargs,
                   double_q=False, use_qv=False, use_qvmax=False, iqn=False, use_soft_q=False, use_munch_q=False):
+    policy_args = (obs_size, act_size)
     if use_qv:
-        policy = QV()
+        policy = QV(*policy_args)
     elif use_qvmax:
-        policy = QVMax()
+        policy = QVMax(*policy_args)
     else:
         policy = create_q(obs_size, act_size, double_q=double_q, soft_q=use_soft_q, munch_q=use_munch_q, iqn=iqn,
                           **policy_kwargs)
     return policy
-
 
 
 class Policy(torch.nn.Module):
