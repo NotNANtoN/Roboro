@@ -2,10 +2,10 @@
 
 # IQN is currently not compatible with QV or QVMAX
 
-opt:
-  name: adam
-  eps: 0.0003125
-  lr: 0.00005
+#opt:
+#  name: adam
+#  eps: 0.0003125
+#  lr: 0.00005
 
 agent:
   iqn: 1
