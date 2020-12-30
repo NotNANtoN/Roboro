@@ -190,6 +190,7 @@ class InternalEnsemble(Q):
         net = kwargs['net']
         self.q_net = None
         self.q_net_target = None
+        # TODO: the instantiation below does not allow IQN to be used in the ensemlbe
         self.q_nets = torch.nn.ModuleList([MLP(obs_size, act_size, **net) for _ in range(size)])
         self.q_nets_target = [MLP(obs_size, act_size, **net) for _ in range(size)]
         self.nets = self.q_nets
@@ -324,7 +325,6 @@ class V(Policy):
 
     @torch.no_grad()
     def next_obs_val(self, next_obs):
-        """If a done_flag is set the next obs val is 0, else calculate it"""
         v_vals_next = self.v_net_target(next_obs)
         return v_vals_next.squeeze()
 

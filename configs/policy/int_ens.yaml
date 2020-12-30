@@ -1,0 +1,6 @@
+# @package _global_
+
+agent:
+  int_ens: 1
+  policy:
+    size: 4
