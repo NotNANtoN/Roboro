@@ -191,31 +191,31 @@ class InternalEnsemble(Q):
         self.q_net = None
         self.q_net_target = None
         # TODO: the instantiation below does not allow IQN to be used in the ensemlbe
-        self.q_nets = torch.nn.ModuleList([MLP(obs_size, act_size, **net) for _ in range(size)])
-        self.q_nets_target = [MLP(obs_size, act_size, **net) for _ in range(size)]
-        self.nets = self.q_nets
-        self.target_nets = self.q_nets_target
+        self.nets = torch.nn.ModuleList([MLP(obs_size, act_size, **net) for _ in range(size)])
+        self.target_nets = torch.nn.ModuleList([MLP(obs_size, act_size, **net) for _ in range(size)])
+        for net in self.target_nets:
+            freeze_params(net)
 
     def __str__(self):
         return f'IntEns_{self.size} <{super().__str__()}>'
 
     def forward(self, obs):
-        preds = torch.stack([pol(obs) for pol in self.q_nets])
+        preds = torch.stack([pol(obs) for pol in self.nets])
         mean_pred = torch.mean(preds, dim=0)
         return mean_pred
 
     @torch.no_grad()
     def q_pred_next_state(self, next_obs, use_target_net=True):
         if use_target_net:
-            nets = self.q_nets_target
+            nets = self.target_nets
         else:
-            nets = self.q_nets
+            nets = self.nets
         preds = torch.stack([net(next_obs) for net in nets])
         pred = self.agg_preds(preds)
         return pred
 
     def obs_val(self, obs):
-        preds = torch.stack([net(obs) for net in self.q_nets])
+        preds = torch.stack([net(obs) for net in self.nets])
         pred = self.agg_preds(preds)
         return pred
 
