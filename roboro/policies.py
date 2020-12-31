@@ -10,7 +10,6 @@ def create_q(*q_args, double_q=False, soft_q=False, munch_q=False, iqn=False, in
     PolicyClass = Q
     if iqn:
         PolicyClass = create_wrapper(SoftQ, PolicyClass)
-        PolicyClass = create_wrapper(MunchQ, PolicyClass)
         PolicyClass = create_wrapper(IQNQ, PolicyClass)
     else:
         if double_q:
@@ -422,7 +421,7 @@ class IQNQ(SoftQ):
         assert td_error.shape == (batch_size, self.num_quantiles, self.num_quantiles),\
             f'Wrong td error shape: {td_error.shape}. target: {q_targets.shape}. expected: {q_expected.shape}'
         huber_l = calculate_huber_loss(td_error, 1.0)
-        quantil_l = abs(taus - (td_error.detach() < 0).float()) * huber_l / 1.0
+        quantil_l = (taus - (td_error.detach() < 0).float()).abs() * huber_l / 1.0
         # loss = quantil_l.sum(dim=1).mean(dim=1, keepdim=True) * weights # FOR PER!
         loss = quantil_l.sum(dim=1).mean(dim=1)  # , keepdim=True if per weights get multipl
         loss = loss.mean()
@@ -430,16 +429,24 @@ class IQNQ(SoftQ):
 
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         batch_size = obs.shape[0]
-        q_quants_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
+
+        with torch.no_grad():
+            q_quants_next, _ = self.q_net_target.get_quantiles(next_obs, self.num_quantiles)
+
         exp_q_next = q_quants_next.mean(dim=1)
         gammas = self._calc_gammas(done_flags, extra_info)
         if not self.munchausen:
+
             # Get max predicted Q values (for next states) from target model
             action_idx = torch.argmax(exp_q_next, dim=1, keepdim=True)
             # Bring in same shape as q_targets_next:
             action_idx = action_idx.unsqueeze(-1).expand(batch_size, self.num_quantiles, 1)
             # Take max actions
             q_targets_next = q_quants_next.gather(dim=2, index=action_idx).transpose(1, 2)
+
+            # Alternative implementation that also runs and learns. Takes max per quantile:
+            #q_targets_next = q_quants_next.max(2)[0].unsqueeze(1)
+
             # Compute Q targets for current states
             q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next)
             assert q_targets.shape == (batch_size, 1, self.num_quantiles), \

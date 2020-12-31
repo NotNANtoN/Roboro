@@ -115,7 +115,6 @@ class IQNNet(torch.nn.Module):
         """
         taus = torch.rand(batch_size, n_tau, 1, dtype=self.pis.dtype, device=self.pis.device)  # (batch_size, n_tau, 1)
         cos = torch.cos(taus * self.pis)
-
         assert cos.shape == (batch_size, n_tau, self.n_cos), "cos shape is incorrect"
         return cos, taus
 
@@ -131,8 +130,6 @@ class IQNNet(torch.nn.Module):
         batch_size = obs.shape[0]
 
         x = torch.relu(self.head(obs))
-        if self.state_dim == 3:
-            x = x.view(obs.size(0), -1)
         cos, taus = self.calc_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
         cos = cos.view(batch_size * num_tau, self.n_cos)
         cos_x = torch.relu(self.cos_embedding(cos)).view(batch_size, num_tau,
