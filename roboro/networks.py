@@ -68,12 +68,13 @@ class MLP(torch.nn.Module):
 
 class IQNNet(torch.nn.Module):
     """IQN net. Adapted from https://github.com/BY571/IQN-and-Extensions"""
-    def __init__(self, obs_size, act_size, num_quantiles,  width=512, dueling=False, noisy_layers=False):
+    def __init__(self, obs_size, act_size, num_tau, num_policy_samples, width=512, dueling=False, noisy_layers=False):
         super().__init__()
         self.in_size = obs_size
         self.state_dim = 1
         self.action_size = act_size
-        self.num_quantiles = num_quantiles
+        self.num_tau = num_tau
+        self.num_policy_samples = num_policy_samples
         self.n_cos = 64
         self.layer_size = width
 
@@ -99,8 +100,10 @@ class IQNNet(torch.nn.Module):
             self.ff_2 = layer(width, act_size)
             # weight_init([self.head_1, self.ff_1])
 
-    def forward(self, obs):
-        quantiles, _ = self.get_quantiles(obs, self.num_quantiles)
+    def forward(self, obs, num_quantiles=None):
+        if num_quantiles is None:
+            num_quantiles = self.num_policy_samples
+        quantiles, _ = self.get_quantiles(obs, num_quantiles)
         actions = quantiles.mean(dim=1)
         return actions
 
@@ -109,16 +112,19 @@ class IQNNet(torch.nn.Module):
         x = self.head(x)
         return x.flatten().shape[0]
 
-    def calc_cos(self, batch_size, n_tau=8):
+    def sample_cos(self, batch_size, num_tau=None):
         """
-        Calculating the cosinus values depending on the number of tau samples
+        Calculating the cosine values depending on the number of tau samples
         """
-        taus = torch.rand(batch_size, n_tau, 1, dtype=self.pis.dtype, device=self.pis.device)  # (batch_size, n_tau, 1)
+        if num_tau is None:
+            num_tau = self.num_tau
+        taus = torch.rand(batch_size, num_tau, 1, dtype=self.pis.dtype, device=self.pis.device)
+        # shape is (batch_size, num_tau, 1)
         cos = torch.cos(taus * self.pis)
-        assert cos.shape == (batch_size, n_tau, self.n_cos), "cos shape is incorrect"
+        assert cos.shape == (batch_size, num_tau, self.n_cos), "cos shape is incorrect"
         return cos, taus
 
-    def get_quantiles(self, obs, num_tau=8):
+    def get_quantiles(self, obs, num_tau=None, cos=None, taus=None):
         """
         Quantile Calculation depending on the number of tau
 
@@ -127,11 +133,14 @@ class IQNNet(torch.nn.Module):
         taus [shape of ((batch_size, num_tau, 1))]
 
         """
+        if num_tau is None:
+            num_tau = self.num_tau
         batch_size = obs.shape[0]
+        if cos is None:
+            cos, taus = self.sample_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
+            cos = cos.view(batch_size * num_tau, self.n_cos)
 
         x = torch.relu(self.head(obs))
-        cos, taus = self.calc_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
-        cos = cos.view(batch_size * num_tau, self.n_cos)
         cos_x = torch.relu(self.cos_embedding(cos)).view(batch_size, num_tau,
                                                          self.cos_layer_out)  # (batch, n_tau, layer)
 
