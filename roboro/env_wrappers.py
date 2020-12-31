@@ -184,7 +184,9 @@ class LazyFrames:
         self.obs_is_dict = isinstance(self._frames[0], dict)
 
     def get_stacked_frames(self):
-        return self.stack_frames(self._frames)
+        import copy
+        frames = copy.copy(self._frames)
+        return self.stack_frames(frames)
 
     def stack_frames(self, frames):
         obs = apply_to_state_list(self.stack, frames)
@@ -193,11 +195,8 @@ class LazyFrames:
     def stack(self, frames):
         return torch.cat(list(frames), dim=0)
 
-    def make_state(self):
-        return self.get_stacked_frames()
-
     def to(self, *args, **kwargs):
-        return self.make_state().to(*args, **kwargs)
+        return self.get_stacked_frames().to(*args, **kwargs)
 
     def __array__(self, dtype=None):
         print("Access forbidden array")
