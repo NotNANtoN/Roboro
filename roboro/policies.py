@@ -179,8 +179,7 @@ class IQNQ(Policy):
     """
     IQN Agent that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
     """
-    def __init__(self, obs_size, act_size, *args, munchausen=False, num_tau=8,
-                 num_policy_samples=32,
+    def __init__(self, obs_size, act_size, *args, num_tau=8, num_policy_samples=32,
                  net: DictConfig = None, **kwargs):
         """Initialize an Agent object.
 
@@ -191,12 +190,10 @@ class IQNQ(Policy):
             tau (float): tau for soft updating the network weights
             gamma (float): discount factor
         """
-        super().__init__(*args, **kwargs) #state_size, action_size, tau=tau, l0=l0, gamma=gamma, net=net)
+        super().__init__(*args, **kwargs)
         self.act_size = act_size
-        self.munchausen = munchausen
         self.huber_thresh = 1.0
-        # Munchausen hyperparams
-        #self.alpha = alpha
+
         # Create IQN-Network
         self.q_net = IQNNet(obs_size, act_size, num_tau, num_policy_samples, **net)
         self.q_net_target = IQNNet(obs_size, act_size, num_tau, num_policy_samples, **net)
@@ -264,28 +261,6 @@ class IQNQ(Policy):
         q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next)
         assert q_targets.shape == (batch_size, 1, num_taus), \
             f"Wrong target shape: {q_targets.shape}"
-
-        if self.munchausen:
-            # calculate log-pi
-            entropy_next_obs = self._calc_entropy(exp_q_next).unsqueeze(1)
-            pi_target = torch.softmax(exp_q_next / self.tau, dim=1).unsqueeze(1)
-
-            next_obs_vals = (gammas.squeeze(-1) *
-                             (pi_target * (q_quants_next - entropy_next_obs)).sum(2)
-                             ).unsqueeze(1)
-            assert next_obs_vals.shape == (batch_size, 1, self.num_quantiles)
-
-            q_k_target = self.q_net_target(obs).detach()
-            tau_log_pi_k = self._calc_entropy(q_k_target)
-            assert tau_log_pi_k.shape == (batch_size, self.act_size), "shape instead is {}".format(
-                tau_log_pi_k.shape)
-            munchausen_addon = tau_log_pi_k.gather(1, actions)
-
-            # calc munchausen reward:
-            munchausen_reward = (rewards + self.alpha * torch.clamp(munchausen_addon, min=self.l0)).unsqueeze(-1)
-            assert munchausen_reward.shape == (batch_size, 1, 1), f"Wrong shape: {munchausen_reward.shape}"
-
-            q_targets = munchausen_reward + next_obs_vals
         return q_targets
 
     def _get_q_preds(self, obs, actions):

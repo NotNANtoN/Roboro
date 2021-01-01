@@ -9,8 +9,8 @@
 
 agent:
   iqn: 1
+  munch_q: 1
   policy:
-    munchausen: 1
     tau: 0.03
     l0: -1
     alpha: 0.9
