@@ -64,16 +64,14 @@ class DoubleQ(Q):
     def __str__(self):
         return f'Double <{super().__str__()}>'
 
-    def next_obs_val(self, next_obs):
+    def next_obs_val(self, *args, **kwargs):
         """Calculate the value of the next obs according to the double Q learning rule.
         It decouples the action selection (done via online network) and the action evaluation (done via target network).
         """
         # Next state action selection
-        q_vals_next_online_net = self.q_pred_next_state(next_obs, use_target_net=False)
-        max_idcs = torch.max(q_vals_next_online_net, dim=1)[1]
+        max_idcs, _ = self.next_obs_act_select(*args, use_target_net=False, **kwargs)
         # Next state action evaluation
-        q_vals_next_target_net = self.q_pred_next_state(next_obs, use_target_net=True)
-        q_vals_next = q_vals_next_target_net.gather(dim=1, index=max_idcs.unsqueeze(1)).squeeze()
+        q_vals_next = self.next_obs_act_eval(max_idcs, *args, use_target_net=True, **kwargs)
         return q_vals_next
 
 

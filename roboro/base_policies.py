@@ -109,11 +109,25 @@ class Q(Policy):
         chosen_action_q_vals = pred_q_vals.gather(dim=1, index=actions.unsqueeze(1)).squeeze()
         return chosen_action_q_vals
 
-    def next_obs_val(self, next_obs):
+    def next_obs_val(self, *args):
         """Calculate the value of the next obs via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
-        q_vals_next = self.q_pred_next_state(next_obs, use_target_net=True)
-        q_vals_next = torch.max(q_vals_next, dim=1)[0]
+        # Next state action selection
+        max_idcs, q_vals_next = self.next_obs_act_select(*args)
+        # Next state action evaluation
+        q_vals_next = self.next_obs_act_eval(max_idcs, *args, q_vals_next_eval=q_vals_next)
+        return q_vals_next
+
+    def next_obs_act_select(self, next_obs, use_target_net=True):
+        # Next state action selection
+        q_vals_next = self.q_pred_next_state(next_obs, use_target_net=use_target_net)
+        max_idcs = torch.argmax(q_vals_next, dim=1, keepdim=True)
+        return max_idcs, q_vals_next
+
+    def next_obs_act_eval(self, max_idcs, next_obs, q_vals_next_eval=None, use_target_net=True):
+        if q_vals_next_eval is None:
+            q_vals_next_eval = self.q_pred_next_state(next_obs, use_target_net=use_target_net)
+        q_vals_next = q_vals_next_eval.gather(dim=1, index=max_idcs).squeeze()
         return q_vals_next
 
     @torch.no_grad()
@@ -204,30 +218,39 @@ class IQNQ(Policy):
     def _get_q_preds(self, obs, actions):
         batch_size = obs.shape[0]
         cos, taus = self.nets[0].sample_cos(batch_size)
-        q_k = self.obs_val(obs, cos=cos, taus=taus)
+        q_k = self.obs_val(obs, cos, taus)
         num_taus = taus.shape[1]
         action_index = actions.unsqueeze(-1).expand(batch_size, num_taus, 1)
         q_expected = q_k.gather(2, action_index)
         assert q_expected.shape == (batch_size, num_taus, 1), f"Wrong shape: {q_expected.shape}"
         return q_expected, taus
 
-    def next_obs_val(self, next_obs, cos, taus):
+    def next_obs_val(self, *args):
         """Calculate the value of the next obs via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
+        # Next state action selection
+        max_idcs, q_vals_next = self.next_obs_act_select(*args)
+        # Next state action evaluation
+        q_vals_next = self.next_obs_act_eval(max_idcs, *args, q_vals_next_eval=q_vals_next)
+        return q_vals_next
+
+    def next_obs_act_select(self, next_obs, cos, taus, use_target_net=True):
+        # Next state action selection
         batch_size = next_obs.shape[0]
         num_taus = taus.shape[1]
-        q_quants_next = self.q_pred_next_state(next_obs, cos, taus)
+        q_quants_next = self.q_pred_next_state(next_obs, cos, taus, use_target_net=use_target_net)
         exp_q_next = q_quants_next.mean(dim=1)
         # Get max predicted Q values (for next states) from target model
-        action_idx = torch.argmax(exp_q_next, dim=1, keepdim=True)
+        max_idcs = torch.argmax(exp_q_next, dim=1, keepdim=True)
         # Bring in same shape as q_targets_next:
-        action_idx = action_idx.unsqueeze(-1).expand(batch_size, num_taus, 1)
+        max_idcs = max_idcs.unsqueeze(-1).expand(batch_size, num_taus, 1)
+        return max_idcs, q_quants_next
+
+    def next_obs_act_eval(self, max_idcs, next_obs, cos, taus, q_vals_next_eval=None, use_target_net=True):
+        if q_vals_next_eval is None:
+            q_vals_next_eval = self.q_pred_next_state(next_obs, cos, taus, use_target_net=use_target_net)
         # Take max actions
-        q_vals_next = q_quants_next.gather(dim=2, index=action_idx).transpose(1, 2)
-
-        # Alternative implementation that also runs and learns. Takes max per quantile:
-        # q_targets_next = q_quants_next.max(2)[0].unsqueeze(1)
-
+        q_vals_next = q_vals_next_eval.gather(dim=2, index=max_idcs).transpose(1, 2)
         return q_vals_next
 
     def obs_val(self, obs, cos, taus, net=None):
