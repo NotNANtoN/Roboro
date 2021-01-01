@@ -22,7 +22,7 @@ class Policy(torch.nn.Module):
 
     def _calc_gammas(self, done_flags, extra_info):
         """Apply the discount factor. If a done flag is set we discount by 0."""
-        gammas = (~done_flags).float()
+        gammas = (~done_flags).float().squeeze()
         if "n_step" in extra_info:
             gammas *= self.gamma ** extra_info["n_step"]
         else:
@@ -80,6 +80,10 @@ class Q(Policy):
 
     def forward(self, obs):
         return self.q_net(obs)
+
+    @torch.no_grad()
+    def forward_target(self, obs):
+        return self.q_net_target(obs)
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
         preds = self._get_q_preds(obs, actions)
@@ -145,7 +149,7 @@ class IQNQ(Policy):
     """
     IQN Policy that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
     """
-    def __init__(self, obs_size, act_size, *args, num_tau=8, num_policy_samples=32, net: DictConfig = None, **kwargs):
+    def __init__(self, obs_size, act_size, *args, num_tau=16, num_policy_samples=32, net: DictConfig = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.act_size = act_size
         self.huber_thresh = 1.0
@@ -164,6 +168,10 @@ class IQNQ(Policy):
 
     def forward(self, obs):
         return self.q_net(obs)
+
+    @torch.no_grad()
+    def forward_target(self, obs):
+        return self.q_net_target(obs)
 
     def create_net(self, target=False):
         net = IQNNet(*self.net_args, **self.net_kwargs)
@@ -208,7 +216,7 @@ class IQNQ(Policy):
         num_taus = taus.shape[1]
 
         q_targets_next = self.next_obs_val(next_obs, cos, taus)
-        gammas = self._calc_gammas(done_flags, extra_info)
+        gammas = self._calc_gammas(done_flags, extra_info).unsqueeze(-1).unsqueeze(-1)
         # Compute Q targets for current states
         q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next)
         assert q_targets.shape == (batch_size, 1, num_taus), \

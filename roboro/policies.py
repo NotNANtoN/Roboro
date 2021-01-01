@@ -94,6 +94,12 @@ class InternalEnsemble(Q):
         return mean_pred
 
     @torch.no_grad()
+    def forward_target(self, obs):
+        preds = torch.stack([pol(obs) for pol in self.target_nets])
+        mean_pred = torch.mean(preds, dim=0)
+        return mean_pred
+
+    @torch.no_grad()
     def q_pred_next_state(self, next_obs, *args, use_target_net=True, **kwargs):
         if use_target_net:
             nets = self.target_nets
@@ -158,14 +164,14 @@ class SoftQ(Q):
         return f'Soft_{self.tau}_{self.l0} <{super().__str__()}>'
 
     @torch.no_grad()
-    def q_pred_next_state(self, next_obs, use_target_net=True):
-        next_state_q_vals = super().q_pred_next_state(next_obs, use_target_net=use_target_net)
-        next_state_policy_distr = torch.softmax(next_state_q_vals, dim=1)
+    def q_pred_next_state(self, next_obs, *args, use_target_net=True, **kwargs):
+        next_state_q_vals = super().q_pred_next_state(next_obs, *args, use_target_net=use_target_net, **kwargs)
+        next_state_policy_distr = torch.softmax(next_state_q_vals / self.tau, dim=-1)
         next_state_preds = next_state_q_vals - self._calc_entropy(next_state_q_vals)
-        return (next_state_policy_distr * next_state_preds).mean(dim=1).unsqueeze(-1)
+        return (next_state_policy_distr * next_state_preds).sum(dim=-1).unsqueeze(-1)
 
     def _calc_entropy(self, q_vals):
-        return torch.clamp(self.tau * torch.log_softmax(q_vals / self.tau, dim=1), min=self.l0)
+        return torch.clamp(self.tau * torch.log_softmax(q_vals / self.tau, dim=-1), min=self.l0)
 
 
 class MunchQ(SoftQ):
@@ -180,8 +186,9 @@ class MunchQ(SoftQ):
     @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
-        munch_reward = self._calc_entropy(self.q_net_target(obs))
-        if actions.ndim != munch_reward.ndim:
+        q_vals = self.forward_target(obs)
+        munch_reward = self._calc_entropy(q_vals)
+        while actions.ndim < munch_reward.ndim:
             actions = actions.unsqueeze(-1)
         munch_reward = munch_reward.gather(1, actions).squeeze()
         while munch_reward.ndim != q_targets.ndim:
