@@ -117,30 +117,21 @@ class Q(Policy):
         return q_vals_next
 
     @torch.no_grad()
-    def q_pred_next_state(self, next_obs, use_target_net=True):
+    def q_pred_next_state(self, next_obs, use_target_net=True, net=None):
         """ Specified in extra method to be potentially overridden by subclasses"""
-        if use_target_net:
-            net = self.q_net_target
-        else:
-            net = self.q_net
+        if net is None:
+            if use_target_net:
+                net = self.q_net_target
+            else:
+                net = self.q_net
         return net(next_obs)
 
 
 class IQNQ(Policy):
     """
-    IQN Agent that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
+    IQN Policy that uses the IQN Layer and calculates a loss. Adapted from https://github.com/BY571/IQN-and-Extensions
     """
-    def __init__(self, obs_size, act_size, *args, num_tau=8, num_policy_samples=32,
-                 net: DictConfig = None, **kwargs):
-        """Initialize an Agent object.
-
-        Params
-        ======
-            state_size (int): dimension of each state
-            action_size (int): dimension of each action
-            tau (float): tau for soft updating the network weights
-            gamma (float): discount factor
-        """
+    def __init__(self, obs_size, act_size, *args, num_tau=8, num_policy_samples=32, net: DictConfig = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.act_size = act_size
         self.huber_thresh = 1.0
@@ -157,14 +148,14 @@ class IQNQ(Policy):
     def __str__(self):
         return f'IQN <{super().__str__()}>'
 
+    def forward(self, obs):
+        return self.q_net(obs)
+
     def create_net(self, target=False):
         net = IQNNet(*self.net_args, **self.net_kwargs)
         if target:
             freeze_params(net)
         return net
-
-    def forward(self, obs):
-        return self.q_net(obs)
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
         # Reshape:
@@ -187,7 +178,7 @@ class IQNQ(Policy):
 
     def _quantile_loss(self, preds, targets, taus, batch_size):
         td_error = targets - preds
-        assert td_error.shape == (batch_size, self.q_net.num_tau, self.q_net.num_tau), \
+        assert td_error.shape == (batch_size, self.nets[0].num_tau, self.nets[0].num_tau), \
             f'Wrong td error shape: {td_error.shape}. target: {targets.shape}. expected: {preds.shape}'
         huber_l = calculate_huber_loss(td_error, self.huber_thresh)
         quantil_l = (taus - (td_error.detach() < 0).float()).abs() * huber_l / self.huber_thresh
@@ -199,12 +190,11 @@ class IQNQ(Policy):
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         batch_size = obs.shape[0]
 
-        cos, taus = self.q_net.sample_cos(batch_size)
+        cos, taus = self.target_nets[0].sample_cos(batch_size)
         num_taus = taus.shape[1]
+
         q_targets_next = self.next_obs_val(next_obs, cos, taus)
-
         gammas = self._calc_gammas(done_flags, extra_info)
-
         # Compute Q targets for current states
         q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next)
         assert q_targets.shape == (batch_size, 1, num_taus), \
@@ -213,7 +203,7 @@ class IQNQ(Policy):
 
     def _get_q_preds(self, obs, actions):
         batch_size = obs.shape[0]
-        cos, taus = self.q_net.sample_cos(batch_size)
+        cos, taus = self.nets[0].sample_cos(batch_size)
         q_k = self.obs_val(obs, cos=cos, taus=taus)
         num_taus = taus.shape[1]
         action_index = actions.unsqueeze(-1).expand(batch_size, num_taus, 1)
@@ -226,7 +216,7 @@ class IQNQ(Policy):
         If a done_flag is set the next obs val is 0, else calculate it"""
         batch_size = next_obs.shape[0]
         num_taus = taus.shape[1]
-        q_quants_next, _ = self.q_net_target.get_quantiles(next_obs, cos=cos, taus=taus)
+        q_quants_next = self.q_pred_next_state(next_obs, cos, taus)
         exp_q_next = q_quants_next.mean(dim=1)
         # Get max predicted Q values (for next states) from target model
         action_idx = torch.argmax(exp_q_next, dim=1, keepdim=True)
@@ -245,6 +235,17 @@ class IQNQ(Policy):
             net = self.q_net
         quants, _ = net.get_quantiles(obs, cos=cos, taus=taus)
         return quants
+
+    @torch.no_grad()
+    def q_pred_next_state(self, next_obs, cos, taus, use_target_net=True, net=None):
+        """ Specified in extra method to be potentially overridden by subclasses"""
+        if net is None:
+            if use_target_net:
+                net = self.q_net_target
+            else:
+                net = self.q_net
+        q_pred, _ = net.get_quantiles(next_obs, cos=cos, taus=taus)
+        return q_pred
 
 
 class V(Policy):

@@ -96,12 +96,13 @@ class InternalEnsemble(Q):
         return mean_pred
 
     @torch.no_grad()
-    def q_pred_next_state(self, next_obs, use_target_net=True):
+    def q_pred_next_state(self, next_obs, *args, use_target_net=True, **kwargs):
         if use_target_net:
             nets = self.target_nets
         else:
             nets = self.nets
-        preds = torch.stack([net(next_obs) for net in nets])
+        pred_next = super().q_pred_next_state
+        preds = torch.stack([pred_next(next_obs, *args, net=net, **kwargs) for net in nets])
         pred = self.agg_preds(preds)
         return pred
 
@@ -139,7 +140,10 @@ class REM(InternalEnsemble):
         return alphas
 
     def agg_preds(self, preds):
-        preds = preds * self.alphas.unsqueeze(-1).unsqueeze(-1)
+        alphas = self.alphas
+        while alphas.ndim < preds.ndim:
+            alphas = alphas.unsqueeze(-1)
+        preds = preds * alphas
         preds = preds.sum(dim=0)
         return preds
 
