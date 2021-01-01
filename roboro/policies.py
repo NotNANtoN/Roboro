@@ -5,30 +5,34 @@ from roboro.networks import MLP, IQNNet
 from roboro.utils import create_wrapper, polyak_update, copy_weights, freeze_params, calculate_huber_loss
 
 
+class TypeNoQ(type):
+    def mro(cls):
+        current_mro = super().mro()
+        modded_mro = tuple(superclass for superclass in current_mro if superclass is not Q)
+        return modded_mro
+
+
 def create_q(*q_args, double_q=False, soft_q=False, munch_q=False, iqn=False, int_ens=False, rem=False,
              **policy_kwargs):
-    #PolicyClass = Q
-    # TODO: the combination of IQNQ with SoftQ does not work yet - for some reason the base policy Q is used...
-    #  look into removing all superclasses within the create_wrapper method. The __bases__ field is not sufficient...
+    add_superclass = type
     if iqn:
-        PolicyClass = IQNQ  #create_wrapper(IQNQ, PolicyClass)
+        add_superclass = TypeNoQ
+        PolicyClass = IQNQ
     else:
         PolicyClass = Q
 
     if double_q:
-        PolicyClass = create_wrapper(DoubleQ, PolicyClass)
+        PolicyClass = create_wrapper(DoubleQ, PolicyClass, add_superclass=add_superclass)
     if soft_q or munch_q:
-        PolicyClass = create_wrapper(SoftQ, PolicyClass)
+        PolicyClass = create_wrapper(SoftQ, PolicyClass, add_superclass=add_superclass)
         if munch_q:
-            PolicyClass = create_wrapper(MunchQ, PolicyClass)
+            PolicyClass = create_wrapper(MunchQ, PolicyClass, add_superclass=add_superclass)
     if int_ens:
-        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass)
+        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass, add_superclass=add_superclass)
     elif rem:
-        PolicyClass = create_wrapper(REM, PolicyClass)
-    print(PolicyClass)
-    print(PolicyClass.__bases__)
-    quit()
+        PolicyClass = create_wrapper(REM, PolicyClass, add_superclass=add_superclass)
     q = PolicyClass(*q_args, **policy_kwargs)
+
     return q
 
 
@@ -399,7 +403,7 @@ class REM(InternalEnsemble):
 # TODO: I had to remove the inheritance from Q because it would always have Q as its superclass even if we want it
 #  based on IQN. Maybe there is a way to filter out superclasses in our "create_wrapper" function such that we can keep
 #  the inheritance here
-class SoftQ:
+class SoftQ(Q):
     def __init__(self, *args, tau=0.03, l0=-1, **kwargs):
         """Entropy-regularized Q-learning. Clip entropy to l0 (=-1) to avoid numeric instability in case of a
         deterministic policy (would otherwise lead to -inf values)."""

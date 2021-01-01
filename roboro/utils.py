@@ -1,9 +1,13 @@
 import torch
 
 
-def create_wrapper(baseclass, superclass):
+def create_wrapper(baseclass, superclass, add_superclass=None):
     name = f'{str(baseclass)} <{str(superclass)}>'
-    return type(name, (baseclass, superclass), dict(vars(baseclass)))
+    if add_superclass is None:
+        add_superclass = type
+    baseclass_vars = dict(vars(baseclass))
+    new_class = add_superclass(name, (baseclass, superclass), baseclass_vars)
+    return new_class
 
 
 def polyak_update(net, target_net, factor):
