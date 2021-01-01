@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from roboro.layers import create_block, DuelingLayer, NoisyLinear
+from roboro.layers import create_dense_layer, DuelingLayer
 
 
 class CNN(torch.nn.Module):
@@ -51,11 +51,11 @@ class MLP(torch.nn.Module):
         super().__init__()
         self.out_size = out_size
         linear_kwargs = {"noisy_linear": noisy_layers, "width": width}
-        self.in_to_hidden = create_block(in_size, width, **linear_kwargs)
+        self.in_to_hidden = create_dense_layer(in_size, width, **linear_kwargs)
         if dueling:
             self.hidden_to_out = DuelingLayer(width, out_size, **linear_kwargs)
         else:
-            self.hidden_to_out = create_block(width, out_size, **linear_kwargs)
+            self.hidden_to_out = create_dense_layer(width, out_size, act_func=False, **linear_kwargs)
 
     def forward(self, state_features):
         hidden = self.in_to_hidden(state_features)
@@ -81,24 +81,13 @@ class IQNNet(torch.nn.Module):
         # Starting from 0 as in the paper
         self.register_buffer("pis", torch.tensor([np.pi * i for i in range(1, self.n_cos + 1)],
                                                  dtype=torch.float).view(1, 1, self.n_cos))
-        self.dueling = dueling
-        if noisy_layers:
-            layer = NoisyLinear
-        else:
-            layer = torch.nn.Linear
-
         # Network Architecture
+        # embedding layers
         self.head = torch.nn.Linear(self.in_size, width)
-        self.cos_embedding = torch.nn.Linear(self.n_cos, width)
-        self.ff_1 = layer(width, width)
         self.cos_layer_out = width
-        if dueling:
-            self.advantage = layer(width, act_size)
-            self.value = layer(width, 1)
-            # weight_init([self.head_1, self.ff_1])
-        else:
-            self.ff_2 = layer(width, act_size)
-            # weight_init([self.head_1, self.ff_1])
+        self.cos_embedding = torch.nn.Linear(self.n_cos, self.cos_layer_out)
+        # processing layers
+        self.out_mlp = MLP(width, act_size, dueling=dueling, noisy_layers=noisy_layers, width=width)
 
     def forward(self, obs, num_quantiles=None):
         if num_quantiles is None:
@@ -138,7 +127,7 @@ class IQNNet(torch.nn.Module):
         batch_size = obs.shape[0]
         if cos is None:
             cos, taus = self.sample_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
-            cos = cos.view(batch_size * num_tau, self.n_cos)
+        cos = cos.view(batch_size * num_tau, self.n_cos)
 
         x = torch.relu(self.head(obs))
         cos_x = torch.relu(self.cos_embedding(cos)).view(batch_size, num_tau,
@@ -147,12 +136,6 @@ class IQNNet(torch.nn.Module):
         # x has shape (batch, layer_size) for multiplication –> reshape to (batch, 1, layer)
         x = (x.unsqueeze(1) * cos_x).view(batch_size * num_tau, self.cos_layer_out)
 
-        x = torch.relu(self.ff_1(x))
-        if self.dueling:
-            advantage = self.advantage(x)
-            value = self.value(x)
-            out = value + advantage - advantage.mean(dim=1, keepdim=True)
-        else:
-            out = self.ff_2(x)
+        x = self.out_mlp(x)
 
-        return out.view(batch_size, num_tau, self.action_size), taus
+        return x.view(batch_size, num_tau, self.action_size), taus
