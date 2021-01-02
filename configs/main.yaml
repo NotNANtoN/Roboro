@@ -35,6 +35,14 @@ learner:
   cer: 0
   per: 0
 
+muzero:
+  n_simulations: 50
+  obs_h_dim: 16
+  batch_size: 128
+  lr: 0.0003
+  value_loss_scale: 0.25
+  dynamics_hidden_size: 64
+  prediction_hidden_size: 64
 
 agent:
   # policy selection
@@ -60,8 +68,8 @@ agent:
       dueling: 0
       noisy_layers: 0
       width: 256
-  
-  
+
+
 # To read the modified CLI args and set the MLflow run_name according to it:
 override_args: ${hydra:job.override_dirname}
 

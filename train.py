@@ -59,7 +59,7 @@ def main(args: DictConfig):
         learner = Learner.load_from_checkpoint(args.path)
     else:
         # create from scratch
-        learner = Learner(steps=args.env_steps, agent_args=args.agent, opt_args=args.opt, **learner_args)
+        learner = Learner(steps=args.env_steps, agent_args=args.agent, opt_args=args.opt, muzero_args=args.muzero, **learner_args)
         # Do the training!
         current_time = time.strftime('%d-%h_%H:%M:%S', time.gmtime())
         checkpoint_callback = ModelCheckpoint(

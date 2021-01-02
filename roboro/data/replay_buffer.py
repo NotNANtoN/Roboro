@@ -28,6 +28,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.rewards = SliceableDeque(maxlen=max_size)
         self.actions = SliceableDeque(maxlen=max_size)
         self.dones = SliceableDeque(maxlen=max_size)
+        self.extra_data = {}
         self.extra_info = defaultdict(SliceableDeque)
 
         # Can bet set from the outside to determine the end of an epoch
@@ -55,6 +56,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
         extra_info = {key: self.extra_info[key][idx] for key in self.extra_info}
         extra_info["idx"] = idx
         reward = self.get_reward(idx)
+        for extra_key in self.extra_data:
+            extra_info[extra_key] = self.extra_data[extra_key][idx]
         return state, self.actions[idx], reward, done, next_state, extra_info
 
     def size(self):
@@ -65,7 +68,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def sample_idx(self):
         return random.randint(0, self.size() - 1)  # subtract one because randint sampling includes the upper bound
 
-    def add(self, state, action, reward, done, store_episodes=False):
+    def add(self, state, action, reward, done, store_episodes=False, extra_data={}):
         # Mark episodic boundaries:
         # if self.dones[self.next_idx]:
         #    self.done_idcs.remove(self.next_idx)
@@ -77,6 +80,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.actions.append(action)
         self.rewards.append(reward)
         self.dones.append(done)
+        for extra_key in extra_data:
+            self.extra_data.setdefault(extra_key, SliceableDeque(maxlen=self.max_size)).append(extra_data[extra_key])
 
     def get_reward(self, idx):
         """ Method that can be overridden by subclasses"""

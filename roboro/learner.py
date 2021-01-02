@@ -7,14 +7,14 @@ import torch.optim as optim
 from torch.optim.optimizer import Optimizer
 from omegaconf import DictConfig
 
-from roboro.agent import Agent
+from roboro.agent import Agent, MuAgent
 from roboro.data import RLDataModule, create_buffer
 
 
 class Learner(pl.LightningModule):
     """
     PyTorch Lightning Module that contains an Agent and trains it in an env
-    
+
     Example:
         >>> import gym
         >>> from roboro.learner import Learner
@@ -50,7 +50,8 @@ class Learner(pl.LightningModule):
                  grayscale: int = 0,
 
                  agent_args: DictConfig = None,
-                 opt_args: DictConfig = None
+                 opt_args: DictConfig = None,
+                 muzero_args: DictConfig = None
                  ):
         super().__init__()
         self.save_hyperparameters()
@@ -72,7 +73,11 @@ class Learner(pl.LightningModule):
         self.val_env, self.val_obs = self.datamodule.get_val_env()
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
-        self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
+        if muzero_args is not None:
+            self.agent = MuAgent(self.train_env.observation_space, self.train_env.action_space,
+                           warm_start_steps=warm_start_size, **agent_args, model_args=muzero_args)
+        else:
+            self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
                            warm_start_steps=warm_start_size, **agent_args)
         #print(self.agent)
 
@@ -159,6 +164,11 @@ class Learner(pl.LightningModule):
         self.agent.update_self(self.total_steps)
         # update buffer
         self.buffer.update(self.total_steps, extra_info)
+
+        if hasattr(self.agent, 'world_model') and self.total_eps % 10 == 0 and self.total_eps > 0:
+            losses = self.agent.world_model.update(*batch)
+            for l_key in losses.keys():
+                self.log(str(l_key), losses[l_key], on_step=False, on_epoch=True, prog_bar=False, logger=True)
         # log metrics
         self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log('eps', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
@@ -207,9 +217,12 @@ class Learner(pl.LightningModule):
     def step_agent(self, obs, env, store=False):
         action = self(obs)
         next_state, r, is_done, _ = env.step(action)
+        extra_data = {}
+        if hasattr(self.agent, 'q_vals'):
+            extra_data['q_vals'] = self.agent.q_vals.detach()
         # add to buffer
         if store:
-            self.buffer.add(state=obs, action=action, reward=r, done=is_done)
+            self.buffer.add(state=obs, action=action, reward=r, done=is_done, extra_data=extra_data)
         return next_state, action, r, is_done
 
     def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False, render=False) -> List[int]:

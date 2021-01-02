@@ -1,5 +1,6 @@
 import random
 
+import numpy as np
 import torch
 import gym
 from omegaconf import DictConfig
@@ -7,6 +8,8 @@ from omegaconf import DictConfig
 from roboro.policies import create_policy
 from roboro.networks import CNN, MLP
 from roboro.utils import Standardizer
+from roboro.world_model import MuZero
+from roboro.mcts import MCTS
 
 
 def get_act_len(act_space):
@@ -46,6 +49,7 @@ class Agent(torch.nn.Module):
         # Get in-out shapes:
         obs_sample = obs_space.sample()
         obs_shape = obs_sample.shape
+        self.obs_shape = obs_shape
         self.act_shape = get_act_len(action_space)
         print("Obs space: ", obs_space)
         print("Obs shape: ", obs_shape, " Act shape: ", self.act_shape)
@@ -99,3 +103,68 @@ class Agent(torch.nn.Module):
 
     def train(self, mode: bool = True):
         self.epsilon = self.stored_epsilon if self.stored_epsilon is not None else self.epsilon
+
+class MuAgent(Agent):
+    def __init__(self, obs_space, action_space,
+                 double_q: bool = False,
+                 qv: bool = False,
+                 qvmax: bool = False,
+                 iqn: bool = False,
+                 soft_q: bool = False,
+                 munch_q: bool = False,
+                 int_ens: bool = False,
+                 rem: bool = False,
+
+                 eps_start: float = 0.1,
+                 target_net_hard_steps: int = 1000,
+                 target_net_polyak_val: float = 0.99,
+                 target_net_use_polyak: bool = True,
+                 warm_start_steps: int = 1000,
+                 feat_layer_width: int = 256,
+                 policy: DictConfig = None,
+
+                 n_simulations: int = 50,
+                 model_args: DictConfig = None,
+                 ):
+        Agent.__init__(self, obs_space, action_space, double_q, qv, qvmax,
+                 iqn, soft_q, munch_q, int_ens, rem, eps_start,
+                 target_net_hard_steps, target_net_polyak_val, target_net_use_polyak, warm_start_steps,
+                 feat_layer_width, policy)
+
+        self.world_model = MuZero(self.obs_shape, self.act_shape, self.normalizer, model_args)
+        self.mcts = MCTS(n_simulations)
+
+    @staticmethod
+    def select_action(node, temperature):
+        visit_counts = np.array(
+            [child.visit_count for child in node.children.values()], dtype="int32"
+        )
+        actions = [action for action in node.children.keys()]
+        if temperature == 0:
+            action = actions[np.argmax(visit_counts)]
+        elif temperature == float("inf"):
+            action = np.random.choice(actions)
+        else:
+            # See paper appendix Data Generation
+            visit_count_distribution = visit_counts ** (1 / temperature)
+            visit_count_distribution = visit_count_distribution / sum(
+                visit_count_distribution
+            )
+            action = np.random.choice(actions, p=visit_count_distribution)
+
+        return torch.tensor(action)
+
+    def forward(self, obs):
+        self.normalizer.observe(obs)  # observe obs and update mean and std
+        if random.random() < self.epsilon:
+            self.q_vals = torch.rand(len(obs), self.act_shape)
+            actions = torch.argmax(self.q_vals, dim=1)
+        else:
+            root, extra_info = self.mcts.run(self.world_model, obs)
+            actions = self.select_action(root, 0.25)
+
+            features = self.extract_features(obs)
+            self.q_vals = self.policy(features)
+
+        actions = torch.argmax(self.q_vals, dim=1)
+        return actions

@@ -23,10 +23,10 @@ class DynamicsNetwork(torch.nn.Module):
         self.h_obs_head = torch.nn.Linear(hidden_size, encoded_obs_size)
 
     def forward(self, obs_h, action):
-        onehot = torch.zeros(size=(len(action),self.action_shape)).type_as(action)
+        onehot = torch.zeros(size=(len(action), self.action_shape)).type_as(action)
         onehot.scatter_(1, action.long(), 1.0)
         x = torch.cat([obs_h, onehot], dim=-1)
-        x = self.mlp(x)
+        x = F.relu(self.mlp(x))
         reward = self.r_head(x)
         next_obs_h = self.h_obs_head(x)
         return next_obs_h, reward
@@ -45,18 +45,22 @@ class PredictionNetwork(torch.nn.Module):
         return policy_q_val, value
 
 class MuZero(torch.nn.Module):
-    def __init__(self, obs_shape, action_shape, normalizer, obs_h_dim=10):
+    def __init__(self, obs_shape, action_shape, normalizer, model_args=None):
         super().__init__()
         self.normalizer = normalizer
         self.criterion = torch.nn.MSELoss()
         self.action_shape = action_shape
         self.obs_shape = obs_shape
+        self.obs_h_dim = model_args.obs_h_dim
+        self.batch_size = model_args.batch_size
+        self.lr = model_args.lr
+        self.model_args = model_args
 
-        self.representation_model = RepresentationNetwork(obs_shape, obs_h_dim).float()
-        self.dynamics_model = DynamicsNetwork(obs_h_dim, action_shape).float()
-        self.prediction_model = PredictionNetwork(obs_h_dim, action_shape).float()
+        self.representation_model = RepresentationNetwork(obs_shape, self.obs_h_dim).float()
+        self.dynamics_model = DynamicsNetwork(self.obs_h_dim, action_shape, hidden_size=model_args.dynamics_hidden_size).float()
+        self.prediction_model = PredictionNetwork(self.obs_h_dim, action_shape, hidden_size=model_args.prediction_hidden_size).float()
 
-        self.optim = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-4)
+        self.optim = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-4)
 
     def forward(self, obs, action, next_obs):
         obs_h = self.representation_model(obs)
@@ -82,50 +86,39 @@ class MuZero(torch.nn.Module):
 
         return best_action.cpu().flatten(), value
 
-    def update(self, buffer):
+    def update(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+        # TODO: Use model batch size
         self.train()
         losses = {}
-        def get_batch():
-            buffer.wm = True
-            s_batch, a_batch, r_batch, s_next_batch, done_batch, values_batch = [], [], [], [], [], []
-            for _ in range(128):
-                bunch = next(iter(buffer))
-                s_batch.append(bunch[0])
-                a_batch.append(bunch[1])
-                r_batch.append(bunch[2])
-                done_batch.append(bunch[3])
-                s_next_batch.append(bunch[4])
-                values_batch.append(bunch[6])
-            buffer.wm = False
-            return torch.stack(s_batch).cuda(), torch.tensor(a_batch).unsqueeze(1).cuda(), torch.tensor(r_batch).unsqueeze(1).cuda(), torch.stack(s_next_batch).cuda(), torch.tensor(done_batch).unsqueeze(1).cuda(), torch.stack(values_batch).unsqueeze(1).cuda().detach()
 
-        for _ in range(1000):
-            self.optim.zero_grad()
-            obs, action, reward, obs_next, done, v_batch, = get_batch()
-            value_batch = v_batch.squeeze().mean(1, keepdim=True)
-            q_val_batch = v_batch.squeeze()
+        self.optim.zero_grad()
+        q_vals = extra_info['q_vals']
+        values = q_vals.squeeze().mean(1, keepdim=True)
+        q_vals.squeeze_()
+        actions = actions.view(-1, 1).float()
+        rewards = rewards.view(-1, 1).float()
 
-            obs = self.normalizer.norm(obs)
-            obs_h = self.representation_model(obs)
-            obs_next = self.normalizer.norm(obs_next)
-            obs_h_next = self.representation_model(obs_next)
+        obs = self.normalizer.norm(obs)
+        obs_h = self.representation_model(obs)
+        obs_next = self.normalizer.norm(next_obs)
+        obs_h_next = self.representation_model(next_obs)
 
-            obs_h_next_pred, pred_reward =  self.dynamics_model(obs_h, action)
+        obs_h_next_pred, pred_reward =  self.dynamics_model(obs_h, actions)
 
-            obs_h_next_loss = self.criterion(obs_h_next_pred, obs_h_next)
-            losses.setdefault("obs_h_next_loss", []).append(obs_h_next_loss.item())
-            reward_loss = self.criterion(pred_reward, reward)
-            losses.setdefault("reward_loss", []).append(reward_loss.item())
+        obs_h_next_loss = self.criterion(obs_h_next_pred, obs_h_next)
+        losses.setdefault("obs_h_next_loss", []).append(obs_h_next_loss.item())
+        reward_loss = self.criterion(pred_reward, rewards)
+        losses.setdefault("reward_loss", []).append(reward_loss.item())
 
-            policy_q_val, value = self.prediction_model(obs_h)
-            value_loss = self.criterion(value, value_batch)
-            losses.setdefault("value_loss", []).append(value_loss.item())
-            policy_loss = self.criterion(policy_q_val, q_val_batch)
-            losses.setdefault("policy_loss", []).append(policy_loss.item())
+        policy_q_vals, pred_values = self.prediction_model(obs_h)
+        value_loss = self.criterion(pred_values, values)
+        losses.setdefault("value_loss", []).append(value_loss.item())
+        policy_loss = self.criterion(policy_q_vals, q_vals)
+        losses.setdefault("policy_loss", []).append(policy_loss.item())
 
-            loss = obs_h_next_loss + reward_loss + value_loss * 0.25 + policy_loss
-            loss.backward()
-            self.optim.step()
+        loss = obs_h_next_loss + reward_loss + value_loss * self.model_args.value_loss_scale + policy_loss
+        loss.backward()
+        self.optim.step()
 
         for l_key in losses:
             losses[l_key] = np.mean(losses[l_key])
