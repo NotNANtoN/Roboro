@@ -36,13 +36,18 @@ learner:
   per: 0
 
 muzero:
-  n_simulations: 50
-  obs_h_dim: 16
+  obs_h_dim: 32
   batch_size: 128
   lr: 0.0003
-  value_loss_scale: 0.25
+  weight_decay: 0.0001
+  value_loss_scale: 1. #0.25
   dynamics_hidden_size: 64
   prediction_hidden_size: 64
+  mcts:
+    discount: 0.997
+    n_simulations: 50
+    dirichlet_alpha: 0.25
+    exploration_ratio: 0.25
 
 agent:
   # policy selection

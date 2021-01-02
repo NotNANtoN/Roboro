@@ -132,7 +132,7 @@ class MuAgent(Agent):
                  feat_layer_width, policy)
 
         self.world_model = MuZero(self.obs_shape, self.act_shape, self.normalizer, model_args)
-        self.mcts = MCTS(n_simulations)
+        self.mcts = MCTS(model_args.mcts, action_space)
 
     @staticmethod
     def select_action(node, temperature):

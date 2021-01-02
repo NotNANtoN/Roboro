@@ -13,7 +13,6 @@ class Node():
         self.hidden_obs = None
         self.prior = prior
 
-    @property
     def expanded(self):
         return len(self.children)
 
@@ -29,26 +28,37 @@ class Node():
         for action, _p in policy.items():
             self.children[action] = Node(_p)
 
+    def add_exploration_noise(self, dirichlet_alpha, exploration_ratio):
+        actions = list(self.children.keys())
+        noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
+        frac = exploration_ratio
+        for a, n in zip(actions, noise):
+            self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
+
 class MCTS():
 
-    def __init__(self, num_simulations):
-        self.num_simulations = num_simulations
-        self.discount = 0.98
+    def __init__(self, args, action_space):
+        self.num_simulations = args.n_simulations
+        self.discount = args.discount
+        self.possible_actions = torch.arange(action_space.n).tolist()
           # UCB formula
         self.pb_c_base = 19652
         self.pb_c_init = 1.25
+        self.dirichlet_alpha = args.dirichlet_alpha
+        self.exploration_ratio = args.exploration_ratio
 
 
+    @torch.no_grad()
     def run(self, model, obs):
         root = Node(0)
         model.eval()
-        obs = model.normalizer.norm(obs)
-        root_obs_h = model.representation_model(obs)
-        root_q_val, root_value = model.prediction_model(root_obs_h)
+        root_obs_h = model.get_hidden_representation(obs)
+        root_q_val, root_value = model.get_policy_prediction(root_obs_h)
         init_a = torch.argmax(root_q_val, dim=1).unsqueeze(1)
-        obs_h_next_pred, pred_reward =  model.dynamics_model(root_obs_h, init_a)
+        obs_h_next_pred, pred_reward =  model.get_dynamics(root_obs_h, init_a)
 
-        root.expand([0,1], pred_reward, root_q_val, root_obs_h)
+        root.expand(self.possible_actions, pred_reward, root_q_val, root_obs_h)
+        root.add_exploration_noise(self.dirichlet_alpha, self.exploration_ratio)
 
         min_max_stats = MinMaxStats()
 
@@ -58,16 +68,16 @@ class MCTS():
             search_path = [node]
             current_tree_depth = 0
 
-            while node.expanded:
+            while node.expanded():
                 current_tree_depth += 1
                 action, node  = self.select_child(node, min_max_stats)
                 search_path.append(node)
 
             parent = search_path[-2]
-            obs_h, pred_reward =  model.dynamics_model(parent.hidden_obs, torch.tensor([[action]]).to(parent.hidden_obs.device))
-            policy_q_val, value = model.prediction_model(obs_h)
+            obs_h, pred_reward =  model.get_dynamics(parent.hidden_obs, torch.tensor([[action]]).to(parent.hidden_obs.device))
+            policy_q_val, value = model.get_policy_prediction(obs_h)
 
-            node.expand([0, 1], pred_reward, policy_q_val, obs_h)
+            node.expand(self.possible_actions, pred_reward, policy_q_val, obs_h)
             self.backpropagate(search_path, value, min_max_stats)
 
             max_tree_depth = max(max_tree_depth, current_tree_depth)
