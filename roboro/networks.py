@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from roboro.layers import create_block, DuelingLayer, NoisyLinear
+from roboro.layers import create_dense_layer, DuelingLayer
 
 
 class CNN(torch.nn.Module):
@@ -51,11 +51,11 @@ class MLP(torch.nn.Module):
         super().__init__()
         self.out_size = out_size
         linear_kwargs = {"noisy_linear": noisy_layers, "width": width}
-        self.in_to_hidden = create_block(in_size, width, **linear_kwargs)
+        self.in_to_hidden = create_dense_layer(in_size, width, **linear_kwargs)
         if dueling:
             self.hidden_to_out = DuelingLayer(width, out_size, **linear_kwargs)
         else:
-            self.hidden_to_out = create_block(width, out_size, **linear_kwargs)
+            self.hidden_to_out = create_dense_layer(width, out_size, act_func=False, **linear_kwargs)
 
     def forward(self, state_features):
         hidden = self.in_to_hidden(state_features)
@@ -68,39 +68,31 @@ class MLP(torch.nn.Module):
 
 class IQNNet(torch.nn.Module):
     """IQN net. Adapted from https://github.com/BY571/IQN-and-Extensions"""
-    def __init__(self, obs_size, act_size, num_quantiles,  width=512, dueling=False, noisy_layers=False):
+    def __init__(self, obs_size, act_size, num_tau, num_policy_samples, width=512, dueling=False, noisy_layers=False):
         super().__init__()
         self.in_size = obs_size
         self.state_dim = 1
         self.action_size = act_size
-        self.num_quantiles = num_quantiles
+        self.num_tau = num_tau
+        self.num_policy_samples = num_policy_samples
         self.n_cos = 64
         self.layer_size = width
 
         # Starting from 0 as in the paper
         self.register_buffer("pis", torch.tensor([np.pi * i for i in range(1, self.n_cos + 1)],
                                                  dtype=torch.float).view(1, 1, self.n_cos))
-        self.dueling = dueling
-        if noisy_layers:
-            layer = NoisyLinear
-        else:
-            layer = torch.nn.Linear
-
         # Network Architecture
+        # embedding layers
         self.head = torch.nn.Linear(self.in_size, width)
-        self.cos_embedding = torch.nn.Linear(self.n_cos, width)
-        self.ff_1 = layer(width, width)
         self.cos_layer_out = width
-        if dueling:
-            self.advantage = layer(width, act_size)
-            self.value = layer(width, 1)
-            # weight_init([self.head_1, self.ff_1])
-        else:
-            self.ff_2 = layer(width, act_size)
-            # weight_init([self.head_1, self.ff_1])
+        self.cos_embedding = torch.nn.Linear(self.n_cos, self.cos_layer_out)
+        # processing layers
+        self.out_mlp = MLP(width, act_size, dueling=dueling, noisy_layers=noisy_layers, width=width)
 
-    def forward(self, obs):
-        quantiles, _ = self.get_quantiles(obs, self.num_quantiles)
+    def forward(self, obs, num_quantiles=None):
+        if num_quantiles is None:
+            num_quantiles = self.num_policy_samples
+        quantiles, _ = self.get_quantiles(obs, num_quantiles)
         actions = quantiles.mean(dim=1)
         return actions
 
@@ -109,17 +101,19 @@ class IQNNet(torch.nn.Module):
         x = self.head(x)
         return x.flatten().shape[0]
 
-    def calc_cos(self, batch_size, n_tau=8):
+    def sample_cos(self, batch_size, num_tau=None):
         """
-        Calculating the cosinus values depending on the number of tau samples
+        Calculating the cosine values depending on the number of tau samples
         """
-        taus = torch.rand(batch_size, n_tau, 1, dtype=self.pis.dtype, device=self.pis.device)  # (batch_size, n_tau, 1)
+        if num_tau is None:
+            num_tau = self.num_tau
+        taus = torch.rand(batch_size, num_tau, 1, dtype=self.pis.dtype, device=self.pis.device)
+        # shape is (batch_size, num_tau, 1)
         cos = torch.cos(taus * self.pis)
-
-        assert cos.shape == (batch_size, n_tau, self.n_cos), "cos shape is incorrect"
+        assert cos.shape == (batch_size, num_tau, self.n_cos), "cos shape is incorrect"
         return cos, taus
 
-    def get_quantiles(self, obs, num_tau=8):
+    def get_quantiles(self, obs, num_tau=None, cos=None, taus=None):
         """
         Quantile Calculation depending on the number of tau
 
@@ -128,25 +122,20 @@ class IQNNet(torch.nn.Module):
         taus [shape of ((batch_size, num_tau, 1))]
 
         """
+        if num_tau is None:
+            num_tau = self.num_tau
         batch_size = obs.shape[0]
+        if cos is None:
+            cos, taus = self.sample_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
+        cos = cos.view(batch_size * num_tau, self.n_cos)
 
         x = torch.relu(self.head(obs))
-        if self.state_dim == 3:
-            x = x.view(obs.size(0), -1)
-        cos, taus = self.calc_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
-        cos = cos.view(batch_size * num_tau, self.n_cos)
         cos_x = torch.relu(self.cos_embedding(cos)).view(batch_size, num_tau,
                                                          self.cos_layer_out)  # (batch, n_tau, layer)
 
         # x has shape (batch, layer_size) for multiplication –> reshape to (batch, 1, layer)
         x = (x.unsqueeze(1) * cos_x).view(batch_size * num_tau, self.cos_layer_out)
 
-        x = torch.relu(self.ff_1(x))
-        if self.dueling:
-            advantage = self.advantage(x)
-            value = self.value(x)
-            out = value + advantage - advantage.mean(dim=1, keepdim=True)
-        else:
-            out = self.ff_2(x)
+        x = self.out_mlp(x)
 
-        return out.view(batch_size, num_tau, self.action_size), taus
+        return x.view(batch_size, num_tau, self.action_size), taus

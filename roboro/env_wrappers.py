@@ -184,20 +184,23 @@ class LazyFrames:
         self.obs_is_dict = isinstance(self._frames[0], dict)
 
     def get_stacked_frames(self):
-        return self.stack_frames(self._frames)
+        # TODO: is a copy necessary? It should not be, but also it seems that stacking takes 4x the memory
+        import copy
+        frames = copy.copy(self._frames)
+        #frames = self._frames
+        stacked = self._stack_frames(frames)
+        return stacked
 
-    def stack_frames(self, frames):
-        obs = apply_to_state_list(self.stack, frames)
+    def _stack_frames(self, frames):
+        obs = apply_to_state_list(self._stack, frames)
         return obs
 
-    def stack(self, frames):
-        return torch.cat(list(frames), dim=0)
-
-    def make_state(self):
-        return self.get_stacked_frames()
+    @staticmethod
+    def _stack(frames):
+        return torch.cat(frames, dim=0)
 
     def to(self, *args, **kwargs):
-        return self.make_state().to(*args, **kwargs)
+        return self.get_stacked_frames().to(*args, **kwargs)
 
     def __array__(self, dtype=None):
         print("Access forbidden array")

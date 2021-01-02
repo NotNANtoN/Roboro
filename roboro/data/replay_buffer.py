@@ -28,7 +28,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.rewards = SliceableDeque(maxlen=max_size)
         self.actions = SliceableDeque(maxlen=max_size)
         self.dones = SliceableDeque(maxlen=max_size)
-        self.extra_info = defaultdict(deque)
+        self.extra_info = defaultdict(SliceableDeque)
 
         # Can bet set from the outside to determine the end of an epoch
         self.should_stop = False
@@ -63,7 +63,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
         return len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
 
     def sample_idx(self):
-        return random.randint(0, self.size() - 1)  # subtract one because randint samples including the upper bound
+        return random.randint(0, self.size() - 1)  # subtract one because randint sampling includes the upper bound
 
     def add(self, state, action, reward, done, store_episodes=False):
         # Mark episodic boundaries:
@@ -78,15 +78,12 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.rewards.append(reward)
         self.dones.append(done)
 
-    def add_field(self, name, val):
-        self.extra_info[name].append(val)
-
     def get_reward(self, idx):
-        """ Method that can be overriden by subclasses"""
+        """ Method that can be overridden by subclasses"""
         return self.rewards[idx]
 
     def get_next_state(self, idx, state):
-        """ Method that can be overriden by subclasses"""
+        """ Method that can be overridden by subclasses"""
         is_end = self.is_end(idx)
         if is_end:
             return torch.zeros_like(state), is_end
@@ -94,7 +91,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
             return self.move(self.states[idx + 1]), is_end
 
     def is_end(self, idx):
-        return self.dones[idx] or idx == len(self.states) - 1
+        return self.dones[idx] or idx == self.size()
 
     def update(self, steps, extra_info):
         """ PER weight update, PER beta update etc can happen here"""
@@ -103,3 +100,6 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def move(self, obs):
         # Stack LazyFrames frames and convert to correct type (for half precision compatibility):
         return apply_to_state(lambda x: x.to("cpu", self.dtype), obs)
+
+    def add_field(self, name, val):
+        self.extra_info[name].append(val)

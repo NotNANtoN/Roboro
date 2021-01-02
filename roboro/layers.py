@@ -4,14 +4,14 @@ import torch
 import torch.nn.functional as F
 
 
-def create_block(in_size, out_size, width=512, noisy_linear=False):
+def create_dense_layer(in_size, out_size, width=512, noisy_linear=False, act_func=True):
     if noisy_linear:
         create_linear = lambda fan_in, fan_out: NoisyLinear(fan_in, fan_out)
     else:
         create_linear = lambda fan_in, fan_out: torch.nn.Linear(fan_in, fan_out)
-    module_list = [create_linear(in_size, width),
-                   torch.nn.ReLU(True),
-                   create_linear(width, out_size)]
+    module_list = [create_linear(in_size, out_size)]
+    if act_func:
+        module_list.append(torch.nn.ReLU(True))
     modules = torch.nn.Sequential(*module_list)
     return modules
 
@@ -29,9 +29,9 @@ class DuelingLayer(torch.nn.Module):
             hidden_size: size of hidden layers
         """
         super().__init__()
-        self.head_adv = create_block(in_size, out_size, **linear_kwargs)
+        self.head_adv = create_dense_layer(in_size, out_size, act_func=False, **linear_kwargs)
         if v_head is None:
-            self.head_val = create_block(in_size, 1, **linear_kwargs)
+            self.head_val = create_dense_layer(in_size, 1, act_func=False, **linear_kwargs)
         else:
             self.head_val = v_head
 
