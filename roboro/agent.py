@@ -89,8 +89,8 @@ class Agent(torch.nn.Module):
         assert done_flags.dtype == torch.bool
         obs_feats = self.extract_features(obs)
         next_obs_feats = self.extract_features(next_obs)
-        loss = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
-        # TODO: incorporate PER weight update in extra_info
+        loss, tde = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
+        extra_info['tde'] = tde
         return loss, extra_info
 
     def eval(self):

@@ -47,11 +47,17 @@ class CNN(torch.nn.Module):
 
 
 class MLP(torch.nn.Module):
-    def __init__(self, in_size, out_size, dueling=False, noisy_layers=False, width=512):
+    def __init__(self, in_size, out_size, dueling=False, noisy_layers=False, width=512, n_layers=2):
         super().__init__()
         self.out_size = out_size
-        linear_kwargs = {"noisy_linear": noisy_layers, "width": width}
+        linear_kwargs = {"noisy_linear": noisy_layers}
         self.in_to_hidden = create_dense_layer(in_size, width, **linear_kwargs)
+        if n_layers > 2:
+            self.hidden_to_hidden = torch.nn.ModuleList([])
+            while n_layers > 2:
+                self.hidden_to_hidden.append(create_dense_layer(width, width, **linear_kwargs))
+        else:
+            self.hidden_to_hidden = None
         if dueling:
             self.hidden_to_out = DuelingLayer(width, out_size, **linear_kwargs)
         else:
@@ -68,7 +74,7 @@ class MLP(torch.nn.Module):
 
 class IQNNet(torch.nn.Module):
     """IQN net. Adapted from https://github.com/BY571/IQN-and-Extensions"""
-    def __init__(self, obs_size, act_size, num_tau, num_policy_samples, width=512, dueling=False, noisy_layers=False):
+    def __init__(self, obs_size, act_size, num_tau, num_policy_samples, **net_kwargs):
         super().__init__()
         self.in_size = obs_size
         self.state_dim = 1
@@ -76,18 +82,18 @@ class IQNNet(torch.nn.Module):
         self.num_tau = num_tau
         self.num_policy_samples = num_policy_samples
         self.n_cos = 64
-        self.layer_size = width
 
         # Starting from 0 as in the paper
         self.register_buffer("pis", torch.tensor([np.pi * i for i in range(1, self.n_cos + 1)],
                                                  dtype=torch.float).view(1, 1, self.n_cos))
         # Network Architecture
         # embedding layers
+        width = net_kwargs["width"]
         self.head = torch.nn.Linear(self.in_size, width)
         self.cos_layer_out = width
         self.cos_embedding = torch.nn.Linear(self.n_cos, self.cos_layer_out)
         # processing layers
-        self.out_mlp = MLP(width, act_size, dueling=dueling, noisy_layers=noisy_layers, width=width)
+        self.out_mlp = MLP(width, act_size, **net_kwargs)
 
     def forward(self, obs, num_quantiles=None):
         if num_quantiles is None:

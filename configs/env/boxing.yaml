@@ -1,0 +1,10 @@
+# @package _global_
+
+env_steps: 1000000
+
+learner:
+  train_env: BoxingNoFrameskip-v4
+  frame_stack: 4
+  frameskip: 4
+  grayscale: 1
+  steps_per_batch: 0.25

@@ -90,8 +90,11 @@ class Q(Policy):
         if targets is None:
             targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
-        loss = (targets - preds) ** 2
-        return loss.mean()
+        tde = (targets - preds)
+        if "sample_weight" in extra_info:
+            tde *= extra_info["sample_weight"]
+        loss = (tde ** 2).mean()
+        return loss, abs(tde)
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
