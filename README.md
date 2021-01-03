@@ -42,3 +42,5 @@ You can combine algorithms as you want. E.g. you can combine IQN with PER, CER a
 - [ ] [Efficient Eligibility traces](https://arxiv.org/abs/1810.09967) - as described in v1 of the arXiv paper.
 - [ ] [MuZero](https://arxiv.org/abs/1911.08265) 
 
+See the [Trello board](https://trello.com/b/8Jaoco2O/roboro) for details.
+
