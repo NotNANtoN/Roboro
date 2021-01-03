@@ -1,6 +1,13 @@
 import torch
 
 
+def unsqueeze_to(x, target):
+    """Adds a dimension to the end of x until x has the same number of dimensions as target"""
+    while x.ndim < target.ndim:
+        x = x.unsqueeze(-1)
+    return x
+
+
 def create_wrapper(baseclass, superclass, add_superclass=None):
     name = f'{str(baseclass)} <{str(superclass)}>'
     if add_superclass is None:

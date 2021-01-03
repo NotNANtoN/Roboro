@@ -1,6 +1,6 @@
 import torch
 
-from roboro.utils import create_wrapper, freeze_params, calculate_huber_loss
+from roboro.utils import create_wrapper, freeze_params, calculate_huber_loss, unsqueeze_to
 from roboro.base_policies import Q, V, MultiNetPolicy
 from roboro.networks import IQNNet
 
@@ -26,10 +26,14 @@ def create_q(*q_args, double_q=False, soft_q=False, munch_q=False, iqn=False, in
     return q
 
 
-def create_v(*v_args, iqn=False, **policy_kwargs):
+def create_v(*v_args, iqn=False, int_ens=False, rem=False, **policy_kwargs):
     PolicyClass = V
     if iqn:
         PolicyClass = create_wrapper(IQN, PolicyClass)
+    if int_ens:
+        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass)
+    elif rem:
+        PolicyClass = create_wrapper(REM, PolicyClass)
     v = PolicyClass(*v_args, **policy_kwargs)
     return v
 
@@ -112,9 +116,11 @@ class IQN(Q):
         num_taus = taus.shape[1]
 
         q_targets_next = self.next_obs_val(next_obs, cos, taus)
-        gammas = self._calc_gammas(done_flags, extra_info).unsqueeze(-1).unsqueeze(-1)
+        gammas = self._calc_gammas(done_flags, extra_info)
         # Compute Q targets for current states
-        q_targets = rewards.unsqueeze(-1) + (gammas * q_targets_next)
+        rewards = unsqueeze_to(rewards, q_targets_next)
+        gammas = unsqueeze_to(gammas, q_targets_next)
+        q_targets = rewards + (gammas * q_targets_next)
         assert q_targets.shape == (batch_size, 1, num_taus), \
             f"Wrong target shape: {q_targets.shape}"
         return q_targets
@@ -241,6 +247,13 @@ class REM(InternalEnsemble):
         self.alphas = None
         return loss
 
+    def calc_target_val(self, *args):
+        obs = args[0]
+        self.alphas = self.gen_alphas(obs)
+        loss = super().calc_target_val(*args)
+        self.alphas = None
+        return loss
+
     def gen_alphas(self, obs):
         alphas = torch.rand(self.size, device=obs.device, dtype=obs.dtype)
         alphas /= alphas.sum()
@@ -248,8 +261,7 @@ class REM(InternalEnsemble):
 
     def agg_preds(self, preds):
         alphas = self.alphas
-        while alphas.ndim < preds.ndim:
-            alphas = alphas.unsqueeze(-1)
+        alphas = unsqueeze_to(alphas, preds)
         preds = preds * alphas
         preds = preds.sum(dim=0)
         return preds
@@ -291,11 +303,9 @@ class MunchQ(SoftQ):
         q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
         q_vals = self.forward_target(obs)
         munch_reward = self._calc_entropy(q_vals)
-        while actions.ndim < munch_reward.ndim:
-            actions = actions.unsqueeze(-1)
+        actions = unsqueeze_to(actions, munch_reward)
         munch_reward = munch_reward.gather(1, actions).squeeze()
-        while munch_reward.ndim != q_targets.ndim:
-            munch_reward = munch_reward.unsqueeze(-1)
+        munch_reward = unsqueeze_to(munch_reward, q_targets)
         munch_reward = munch_reward.expand(*q_targets.shape)
         munchausen_targets = q_targets + self.alpha * munch_reward
         return munchausen_targets
