@@ -23,20 +23,22 @@ You can combine algorithms as you want. E.g. you can combine IQN with PER, CER a
 ```python3 train.py env=pong agent.iqn=1 agent.munch_q=1 learner.per=1 learner.cer=1```.
 
 ## Supported algorithms
-* [Uniform Experience Replay](http://www.incompleteideas.net/lin-92.pdf) and [Prioritied Experience Replay](https://arxiv.org/abs/1511.05952). Defaults to uniform exp replay.
-* Corrected Experience Replay, [CER](https://arxiv.org/abs/1712.01275). Can be combined either with uniform or prioritized experience replay.
-* Use of a target net that is updated every N steps or of a Polyak-averaged target network, as seen in [DDPG](https://arxiv.org/abs/1509.02971). Defaults to Polyak-averaging.
-* [QV](https://www.researchgate.net/publication/224446250_The_QV_family_compared_to_other_reinforcement_learning_algorithms) and [QVMax](https://arxiv.org/abs/1909.01779v1) learning
-* Observation standardization. Turned on by default.
-* Random Ensemble Mixture, [REM](https://arxiv.org/abs/1907.04543). During the value net optimization, a mixture of a randomly sampled categorical distribution of N value networks is used.
-* Implicit Quantile Networks [IQN](https://arxiv.org/abs/1806.06923). The value network is trained to predict N quantiles of the return.
-* Munchausen RL [M-RL](https://arxiv.org/abs/2007.14430). A form of maximum-entropy RL that focuses on optimizing for the optimal policy, next to the optimal value function.
-* Double Q-learning [DDQN](https://arxiv.org/abs/1509.06461). To avoid the Q-learning maximization bias, the online network is used in the action-selection of the Bellman update, whereas the target network is used for the evaluation of this selected action.
+
+- [x] [Uniform Experience Replay](http://www.incompleteideas.net/lin-92.pdf) and [Prioritied Experience Replay](https://arxiv.org/abs/1511.05952). Defaults to uniform exp replay.
+- [x] Corrected Experience Replay, [CER](https://arxiv.org/abs/1712.01275). Can be combined either with uniform or prioritized experience replay.
+- [x] Double Q-learning [DDQN](https://arxiv.org/abs/1509.06461). To avoid the Q-learning maximization bias, the online network is used in the action-selection of the Bellman update, whereas the target network is used for the evaluation of this selected action.
+- [x] Use of a target net that is updated every N steps or of a Polyak-averaged target network, as seen in [DDPG](https://arxiv.org/abs/1509.02971). Defaults to Polyak-averaging.
+- [x] [QV](https://www.researchgate.net/publication/224446250_The_QV_family_compared_to_other_reinforcement_learning_algorithms) and [QVMax](https://arxiv.org/abs/1909.01779v1) learning. Next to a Q-network, a V-network (state-value network) is trained. In QV-learning, the Q-network is trained using the target of the V-network. In QVMAX, additionally, the V-network ist trained using the target of the Q-network (making this an off-policy algorithm).
+- [x] Observation Z-standardization. The mean and std are collected during an initial rollout of random actions. Turned on by default.
+- [x] Random Ensemble Mixture, [REM](https://arxiv.org/abs/1907.04543). During the value net optimization, a mixture of a randomly sampled categorical distribution of N value networks is used.
+- [x] Implicit Quantile Networks [IQN](https://arxiv.org/abs/1806.06923). The value network is trained to predict N quantiles of the return.
+- [x] Munchausen RL [M-RL](https://arxiv.org/abs/2007.14430). A form of maximum-entropy RL that focuses on optimizing for the optimal policy, next to the optimal value function.
+
 
 ## Coming soon
 
-- [] Training on offline data
-- [] Evaluating agents using offline data
-- [] [Efficient Eligibility traces](https://arxiv.org/abs/1810.09967) - as described in v1 of the arXiv paper.
-- [] [MuZero](https://arxiv.org/abs/1911.08265) 
+- [ ] Training on offline data
+- [ ] Evaluating agents using offline data
+- [ ] [Efficient Eligibility traces](https://arxiv.org/abs/1810.09967) - as described in v1 of the arXiv paper.
+- [ ] [MuZero](https://arxiv.org/abs/1911.08265) 
 
