@@ -2,7 +2,7 @@ import torch
 from omegaconf import DictConfig, open_dict
 
 from roboro.networks import MLP
-from roboro.utils import polyak_update, copy_weights, freeze_params
+from roboro.utils import polyak_update, copy_weights, freeze_params, unsqueeze_to
 
 
 class Policy(torch.nn.Module):
@@ -64,8 +64,8 @@ class Q(Policy):
         self.obs_size = obs_size
         self.act_size = act_size
         self.net_config = net
-        self.net_args = self.net_args()  #(obs_size, act_size) if not hasattr(self, 'net_args') else self.net_args
-        self.net_kwargs = self.net_kwargs()  # net if not hasattr(self, 'net_kwargs') else self.net_kwargs
+        self.net_args = self.net_args()
+        self.net_kwargs = self.net_kwargs()
         self.q_net = self.create_net()
         self.q_net_target = self.create_net(target=True)
         # Create net lists to update target nets
@@ -96,10 +96,10 @@ class Q(Policy):
     def forward_target(self, obs):
         return self.q_net_target(obs)
 
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
         preds = self._get_obs_preds(obs, actions)
-        if targets is None:
-            targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info,
+                                       next_obs_val=next_obs_val)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = (targets - preds)
         loss = tde.pow(2)
@@ -108,11 +108,12 @@ class Q(Policy):
         return loss.mean(), abs(tde)
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_vals_next = self.next_obs_val(next_obs)
-        assert q_vals_next.shape == rewards.shape
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
+        if next_obs_val is None:
+            next_obs_val = self.next_obs_val(next_obs)
+        assert next_obs_val.shape == rewards.shape
         gammas = self._calc_gammas(done_flags, extra_info)
-        targets = rewards + gammas * q_vals_next
+        targets = rewards + gammas * next_obs_val
         return targets
 
     def obs_val(self, obs, net=None):
@@ -127,8 +128,7 @@ class Q(Policy):
         return chosen_action_q_vals.squeeze()
 
     def _gather_obs(self, preds, actions):
-        while actions.ndim < preds.ndim:
-            actions = actions.unsqueeze(-1)
+        actions = unsqueeze_to(actions, preds)
         actions = actions.expand(*preds.shape[:-1], 1)
         return preds.gather(dim=-1, index=actions)
 
@@ -165,6 +165,9 @@ class Q(Policy):
 
 
 class V(Q):
+    """Implements a state-value network by creating a Q-network with only one action.
+    Only the _gather_preds function needs to be overwritten"""
+
     def __init__(self, obs_size, act_size, net: DictConfig = None, *args, **kwargs):
         super(V, self).__init__(obs_size, act_size, *args, net=net, **kwargs)
 
@@ -172,11 +175,12 @@ class V(Q):
         return f'V <{super().__str__()}>'
 
     def _gather_obs(self, preds, actions):
+        """Instead of gathering the prediction according to the actions, simply return the predictions"""
         return preds
 
     def net_args(self):
         args = super().net_args()
-        args[1] = 1
+        args[1] = 1  # set act_size to 1
         return args
 
     def net_kwargs(self):

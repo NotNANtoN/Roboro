@@ -80,16 +80,14 @@ class IQN(Q):
             freeze_params(net)
         return net
 
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
+    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
         # Reshape:
         batch_size = obs.shape[0]
-        rewards = rewards.unsqueeze(-1)
         actions = actions.unsqueeze(-1)
-        done_flags = done_flags.unsqueeze(-1).unsqueeze(-1)
 
         # Calc target vals
-        if targets is None:
-            targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info,
+                                       next_obs_val=next_obs_val)
         # Get expected Q values from local model
         q_expected, taus = self._get_obs_preds(obs, actions)
         # Quantile Huber loss
@@ -109,18 +107,19 @@ class IQN(Q):
         return loss, td_error.sum(dim=1).mean(dim=1)
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
         batch_size = obs.shape[0]
 
         cos, taus = self.target_nets[0].sample_cos(batch_size)
         num_taus = taus.shape[1]
 
-        q_targets_next = self.next_obs_val(next_obs, cos, taus)
+        if next_obs_val is None:
+            next_obs_val = self.next_obs_val(next_obs, cos, taus)
         gammas = self._calc_gammas(done_flags, extra_info)
         # Compute Q targets for current states
-        rewards = unsqueeze_to(rewards, q_targets_next)
-        gammas = unsqueeze_to(gammas, q_targets_next)
-        q_targets = rewards + (gammas * q_targets_next)
+        rewards = unsqueeze_to(rewards, next_obs_val)
+        gammas = unsqueeze_to(gammas, next_obs_val)
+        q_targets = rewards + (gammas * next_obs_val)
         assert q_targets.shape == (batch_size, 1, num_taus), \
             f"Wrong target shape: {q_targets.shape}"
         return q_targets
@@ -149,7 +148,7 @@ class IQN(Q):
         if q_vals_next_eval is None:
             q_vals_next_eval = self.q_pred_next_state(next_obs, cos, taus, use_target_net=use_target_net)
         # Take max actions
-        q_vals_next = q_vals_next_eval.gather(dim=2, index=max_idcs).transpose(1, 2)
+        q_vals_next = q_vals_next_eval.gather(dim=-1, index=max_idcs).transpose(1, 2)
         return q_vals_next
 
     def obs_val(self, obs, cos, taus, net=None):
@@ -300,8 +299,9 @@ class MunchQ(SoftQ):
         return f'Munchausen_{self.alpha} <{super().__str__()}>'
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info):
-        q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, *args, **kwargs):
+        q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info, *args,
+                                                        **kwargs)
         q_vals = self.forward_target(obs)
         munch_reward = self._calc_entropy(q_vals)
         actions = unsqueeze_to(actions, munch_reward)
@@ -329,13 +329,13 @@ class QV(MultiNetPolicy):
         return self.q(obs)
 
     def calc_loss(self, *loss_args):
-        v_target = self.v.calc_target_val(*loss_args)
-        loss, abs_tde = self._calc_qv_loss(*loss_args, q_target=v_target, v_target=v_target)
+        v_next_obs_val = self.v.calc_target_val(*loss_args)
+        loss, abs_tde = self._calc_qv_loss(*loss_args, q_next_obs_val=v_next_obs_val, v_next_obs_val=v_next_obs_val)
         return loss, abs_tde
 
-    def _calc_qv_loss(self, *loss_args, q_target=None, v_target=None):
-        v_loss, v_abs_tde = self.v.calc_loss(*loss_args, targets=v_target)
-        q_loss, q_abs_tde = self.q.calc_loss(*loss_args, targets=q_target)
+    def _calc_qv_loss(self, *loss_args, q_next_obs_val=None, v_next_obs_val=None):
+        v_loss, v_abs_tde = self.v.calc_loss(*loss_args, next_obs_val=v_next_obs_val)
+        q_loss, q_abs_tde = self.q.calc_loss(*loss_args, next_obs_val=q_next_obs_val)
         loss = (v_loss + q_loss).mean()
         abs_tde = v_abs_tde + q_abs_tde
         return loss, abs_tde
