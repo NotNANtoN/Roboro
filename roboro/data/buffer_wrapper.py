@@ -74,7 +74,6 @@ class PER(RLBuffer):
     def sample_idx(self):
         if self.tree_sum is None:
             self.calc_and_save_max_weight()
-        #assert self._it_sum.sum(0, self.size() + 1) == self._it_sum.sum()
         mass = random.random() * self.tree_sum  #self._it_sum.sum(0, self.size() + 1)
         tree_idx = self._it_sum.find_prefixsum_idx(mass)
         buff_idx = self.tree_to_buff_idx(tree_idx)

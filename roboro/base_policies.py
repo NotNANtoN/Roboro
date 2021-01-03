@@ -1,5 +1,5 @@
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, open_dict
 
 from roboro.networks import MLP, IQNNet
 from roboro.utils import polyak_update, copy_weights, freeze_params, calculate_huber_loss
@@ -86,7 +86,7 @@ class Q(Policy):
         return self.q_net_target(obs)
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
-        preds = self._get_q_preds(obs, actions)
+        preds = self._get_obs_preds(obs, actions)
         if targets is None:
             targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
@@ -109,11 +109,17 @@ class Q(Policy):
             net = self.q_net
         return net(obs)
 
-    def _get_q_preds(self, obs, actions):
+    def _get_obs_preds(self, obs, actions):
         """Get Q-value predictions for current obs based on actions"""
         pred_q_vals = self.obs_val(obs)
-        chosen_action_q_vals = pred_q_vals.gather(dim=1, index=actions.unsqueeze(1)).squeeze()
-        return chosen_action_q_vals
+        chosen_action_q_vals = self._gather_obs(pred_q_vals, actions)
+        return chosen_action_q_vals.squeeze()
+
+    def _gather_obs(self, preds, actions):
+        while actions.ndim < preds.ndim:
+            actions = actions.unsqueeze(-1)
+        actions = actions.expand(*preds.shape[:-1], 1)
+        return preds.gather(dim=-1, index=actions)
 
     def next_obs_val(self, *args):
         """Calculate the value of the next obs via the target network.
@@ -145,6 +151,17 @@ class Q(Policy):
             else:
                 net = self.q_net
         return net(next_obs)
+
+
+class V(Q):
+    def __init__(self, obs_size, net: DictConfig = None, *args, **kwargs):
+        print(net)
+        with open_dict(net):
+            del net['dueling']
+        super(V, self).__init__(obs_size, 1, *args, net=net, **kwargs)
+
+    def _gather_obs(self, preds, actions):
+        return preds
 
 
 class IQNQ(Policy):
@@ -194,11 +211,11 @@ class IQNQ(Policy):
         else:
             q_targets = targets
         # Get expected Q values from local model
-        q_expected, taus = self._get_q_preds(obs, actions)
+        q_expected, taus = self._get_obs_preds(obs, actions)
         # Quantile Huber loss
         loss = self._quantile_loss(q_expected, q_targets, taus, batch_size)
         loss = loss.mean()
-        return loss
+        return loss, 0
 
     def _quantile_loss(self, preds, targets, taus, batch_size):
         td_error = targets - preds
@@ -225,15 +242,25 @@ class IQNQ(Policy):
             f"Wrong target shape: {q_targets.shape}"
         return q_targets
 
-    def _get_q_preds(self, obs, actions):
+    def _get_obs_preds(self, obs, actions):
         batch_size = obs.shape[0]
         cos, taus = self.nets[0].sample_cos(batch_size)
         q_k = self.obs_val(obs, cos, taus)
-        num_taus = taus.shape[1]
-        action_index = actions.unsqueeze(-1).expand(batch_size, num_taus, 1)
-        q_expected = q_k.gather(2, action_index)
-        assert q_expected.shape == (batch_size, num_taus, 1), f"Wrong shape: {q_expected.shape}"
-        return q_expected, taus
+
+        chosen_action_q_vals = self._gather_obs(q_k, actions)
+        return chosen_action_q_vals, taus
+
+        #num_taus = taus.shape[1]
+        #action_index = actions.unsqueeze(-1).expand(batch_size, num_taus, 1)
+        #q_expected = q_k.gather(2, action_index)
+        #assert q_expected.shape == (batch_size, num_taus, 1), f"Wrong shape: {q_expected.shape}"
+        #return q_expected, taus
+
+    def _gather_obs(self, preds, actions):
+        while actions.ndim < preds.ndim:
+            actions = actions.unsqueeze(-1)
+        actions = actions.expand(*preds.shape[:-1], 1)
+        return preds.gather(dim=-1, index=actions)
 
     def next_obs_val(self, *args):
         """Calculate the value of the next obs via the target network.
@@ -281,14 +308,14 @@ class IQNQ(Policy):
         return q_pred
 
 
-class V(Policy):
+class V_old(Policy):
     """A state value network"""
 
     def __init__(self, obs_size, net: DictConfig = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         v_out_size = 1
-        net = dict(net)
-        del net["dueling"]
+        with open_dict(net):
+            del net['dueling']
         print(obs_size, net)
         self.v_net = MLP(obs_size, v_out_size, **net)
         self.v_net_target = MLP(obs_size, v_out_size, **net)

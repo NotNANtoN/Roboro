@@ -214,14 +214,15 @@ class QV(MultiNetPolicy):
 
     def calc_loss(self, *loss_args):
         v_target = self.v.calc_target_val(*loss_args)
-        loss = self._calc_qv_loss(*loss_args, q_target=v_target, v_target=v_target)
-        return loss
+        loss, abs_tde = self._calc_qv_loss(*loss_args, q_target=v_target, v_target=v_target)
+        return loss, abs_tde
 
     def _calc_qv_loss(self, *loss_args, q_target=None, v_target=None):
-        v_loss = self.v.calc_loss(*loss_args, targets=v_target)
-        q_loss = self.q.calc_loss(*loss_args, targets=q_target)
+        v_loss, v_abs_tde = self.v.calc_loss(*loss_args, targets=v_target)
+        q_loss, q_abs_tde = self.q.calc_loss(*loss_args, targets=q_target)
         loss = (v_loss + q_loss).mean()
-        return loss
+        abs_tde = v_abs_tde + q_abs_tde
+        return loss, abs_tde
 
 
 class QVMax(QV):
@@ -232,8 +233,8 @@ class QVMax(QV):
     def calc_loss(self, *loss_args):
         q_target = self.q.calc_target_val(*loss_args)
         v_target = self.v.calc_target_val(*loss_args)
-        loss = self._calc_qv_loss(*loss_args, q_target=v_target, v_target=q_target)
-        return loss
+        loss, abs_tde = self._calc_qv_loss(*loss_args, q_target=v_target, v_target=q_target)
+        return loss, abs_tde
 
 
 class Ensemble(MultiNetPolicy):
