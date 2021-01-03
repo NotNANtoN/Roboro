@@ -17,7 +17,10 @@ For Pong: ```python3 train.py env=pong```
 
 For any other gym-registered env e.g.: ```python3 train.py learner.train_env=PongNoFrameskip-v4```
 
-Check out `configs/main.py` for adjustable hyperparameters. E.g. you can force the use of frameskipping and change the learning rate by calling: ```python3 train.py learner.train_env=PongNoFrameskip-v4 opt.lr=0.001 learner.frameskip=2```
+Check out `configs/main.py` for adjustable hyperparameters. E.g. you can force the use of frameskipping and change the learning rate by calling: ```python3 train.py learner.train_env=PongNoFrameskip-v4 opt.lr=0.001 learner.frameskip=2```.
+
+You can combine algorithms as you want. E.g. you can combine IQN with PER, CER and M-Rl to train on Pong like this:
+```python3 train.py env=pong agent.iqn=1 agent.munch_q=1 learner.per=1 learner.cer=1```.
 
 ## Supported algorithms
 * [Uniform Experience Replay](http://www.incompleteideas.net/lin-92.pdf) and [Prioritied Experience Replay](https://arxiv.org/abs/1511.05952). Defaults to uniform exp replay.
@@ -30,9 +33,10 @@ Check out `configs/main.py` for adjustable hyperparameters. E.g. you can force t
 * Munchausen RL [M-RL](https://arxiv.org/abs/2007.14430). A form of maximum-entropy RL that focuses on optimizing for the optimal policy, next to the optimal value function.
 * Double Q-learning [DDQN](https://arxiv.org/abs/1509.06461). To avoid the Q-learning maximization bias, the online network is used in the action-selection of the Bellman update, whereas the target network is used for the evaluation of this selected action.
 
-## Missing
+## Coming soon
 
-[] Training on offline data
-[] Evaluating agents using offline data
-[] [Efficient Eligibility traces](https://arxiv.org/abs/1810.09967) - as described in v1 of the arXiv paper.
+- [] Training on offline data
+- [] Evaluating agents using offline data
+- [] [Efficient Eligibility traces](https://arxiv.org/abs/1810.09967) - as described in v1 of the arXiv paper.
+- [] [MuZero](https://arxiv.org/abs/1911.08265) 
 
