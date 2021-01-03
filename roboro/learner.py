@@ -87,7 +87,6 @@ class Learner(pl.LightningModule):
         self.n_evals = 0
 
         # tracking hyperparams:
-        # TODO: calc steps by giving percentage at which we want to evaluate
         self.steps_per_epoch = min(max(steps / 100, 500), 20000)
         print("Steps per epoch: ", self.steps_per_epoch)
         self.steps_per_batch = steps_per_batch
@@ -185,12 +184,10 @@ class Learner(pl.LightningModule):
 
     def validation_step(self, batch, *args, **kwargs):
         if batch is not None:
-            # TODO: do evaluation on random episodes of expert data
             pass
 
     def test_step(self, batch, *args, **kwargs):
         if batch is not None:
-            # TODO: do evaluation on random episodes of expert data
             pass
 
     def test_epoch_end(self, outputs: List[Any]) -> None:

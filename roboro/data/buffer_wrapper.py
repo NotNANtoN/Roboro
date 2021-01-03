@@ -8,7 +8,6 @@ from roboro.utils import create_wrapper
 
 
 def create_buffer(buffer_size, n_step, per, cer, gamma):
-    # TODO: add simplified ERE (bias more recent transitions)
     # Create replay buffer
     update_freq = 0
     buffer_args = [buffer_size]
@@ -155,7 +154,6 @@ class PER(RLBuffer):
         tde = extra_info["tde"]
         self.update_priorities(buff_idcs, tde)
         self.calc_and_save_max_weight()
-        # TODO: update beta from beta_start to beta_end in some way
 
 
 class NStep(RLBuffer):

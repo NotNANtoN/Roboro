@@ -21,8 +21,6 @@ class RLDataModule(pl.LightningDataModule):
         if train_ds is not None:
             #self.dev_dataset = create_dl(train_ds)
             #self.train_data, self.val_data = random_split(dev_data, [55000, 5000])
-            # TODO: make train/val/test split and use it
-            # TODO: somehow extract obs wrapper from env and use it in dataloader (what if there is no env?)
             pass
         # init val loader
         self.val_env, self.val_dl = self.train_env, self.train_dl
@@ -43,7 +41,6 @@ class RLDataModule(pl.LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         """Get train loader"""
-        # TODO: combine replay buffer dataloader with expert data dataloader
         return self._dataloader(self.buffer)
 
     def val_dataloader(self) -> DataLoader:

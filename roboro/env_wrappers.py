@@ -26,8 +26,6 @@ def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
     # Init env:
     env = gym.make(env_name)
 
-    # TODO: might want to add a sticky action wrapper!
-
     # Apply Wrappers:
     if CustomWrapper is not None:
         env = CustomWrapper(env)
@@ -184,7 +182,6 @@ class LazyFrames:
         self.obs_is_dict = isinstance(self._frames[0], dict)
 
     def get_stacked_frames(self):
-        # TODO: is a copy necessary? It should not be, but also it seems that stacking takes 4x the memory
         import copy
         frames = copy.copy(self._frames)
         #frames = self._frames

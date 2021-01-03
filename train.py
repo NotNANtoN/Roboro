@@ -83,7 +83,6 @@ def main(args: DictConfig):
         #         verbose=False,
         # )
 
-        # TODO: investigate why 16 precision is slower than 32
 
         # Apply seed if wanted
         deterministic = False
@@ -110,13 +109,11 @@ def main(args: DictConfig):
     # Get train env:
     env = learner.train_env
     # Test agent using internal function:
-    # TODO: re-enable rendering once it works on my machine
     total_return = learner.run(env, n_steps=0, n_eps=10, render=args.render)
     print("Avg return from internal run function: ", sum(total_return) / len(total_return))
     # Test the agent after training:
     total_return = test_agent(learner, env, render=args.render)
     print("Return of learner: ", total_return)
-    # TODO: investigate embeddings of feature net of agent by applying UMAP and coloring by value!
 
 
 if __name__ == "__main__":

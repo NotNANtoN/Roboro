@@ -37,7 +37,6 @@ def create_q(*q_args, double_q=False, soft_q=False, munch_q=False, iqn=False, in
 
 def create_v(*v_args, iqn=False, **policy_kwargs):
     PolicyClass = V
-    # TODO: create IQN_V class to allow implicit quantile networks for V. This allows IQN+QV
     v = PolicyClass(*v_args, **policy_kwargs)
     return v
 
@@ -111,7 +110,6 @@ class InternalEnsemble(Q):
         return pred
 
     def obs_val(self, obs, *args, **kwargs):
-        # TODO: why is the line below necessary?! if super().obs_val is used in the list comprehension it crashes...
         obs_func = super().obs_val
         #print(obs_func(obs, *args, net=self.nets[0], **kwargs))
         preds = torch.stack([obs_func(obs, *args, net=net, **kwargs) for net in self.nets])
@@ -206,7 +204,6 @@ class QV(MultiNetPolicy):
         super().__init__()
         self.v = create_v(*v_args, **v_creation_kwargs, **policy_kwargs)
         self.q = create_q(*q_args, **q_creation_kwargs, **policy_kwargs)
-        # TODO: if dueling is set, try to incorporate the V net into the Q net
         self.policies = [self.v, self.q]
 
     def __str__(self):

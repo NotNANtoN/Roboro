@@ -112,7 +112,6 @@ class Q(Policy):
     def _get_q_preds(self, obs, actions):
         """Get Q-value predictions for current obs based on actions"""
         pred_q_vals = self.obs_val(obs)
-        # TODO: isn't there a better method than this stupid gather?
         chosen_action_q_vals = pred_q_vals.gather(dim=1, index=actions.unsqueeze(1)).squeeze()
         return chosen_action_q_vals
 
