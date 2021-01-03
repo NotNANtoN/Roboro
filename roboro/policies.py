@@ -240,18 +240,19 @@ class REM(InternalEnsemble):
     def __str__(self):
         return f'REM_{self.size} <{super().__str__()}>'
 
-    def calc_loss(self, *args):
+    def calc_loss(self, *args, **kwargs):
         obs = args[0]
-        self.alphas = self.gen_alphas(obs)
-        loss = super().calc_loss(*args)
+        if self.alphas is None:
+            self.alphas = self.gen_alphas(obs)
+        loss = super().calc_loss(*args, **kwargs)
         self.alphas = None
         return loss
 
-    def calc_target_val(self, *args):
+    def calc_target_val(self, *args, **kwargs):
         obs = args[0]
-        self.alphas = self.gen_alphas(obs)
-        loss = super().calc_target_val(*args)
-        self.alphas = None
+        if self.alphas is None:
+            self.alphas = self.gen_alphas(obs)
+        loss = super().calc_target_val(*args, **kwargs)
         return loss
 
     def gen_alphas(self, obs):
