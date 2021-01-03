@@ -10,5 +10,5 @@
 agent:
   iqn: 1
   policy:
-    num_tau: 8
+    num_tau: 16
     num_policy_samples: 32
