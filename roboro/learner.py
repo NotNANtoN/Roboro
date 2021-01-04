@@ -45,7 +45,7 @@ class Learner(pl.LightningModule):
                  cer: int = 0,
                  per: int = 0,
 
-                 sticky_action_prob: float = 0.0,
+                 sticky_actions: float = 0.0,
                  frame_stack: int = 0,
                  frameskip: int = 2,
                  grayscale: int = 0,
@@ -65,7 +65,7 @@ class Learner(pl.LightningModule):
                                        test_env, test_ds,
                                        frame_stack=frame_stack,
                                        frameskip=frameskip,
-                                       sticky_action_prob=sticky_action_prob,
+                                       sticky_action_prob=sticky_actions,
                                        grayscale=grayscale,
                                        batch_size=batch_size,
                                        num_workers=num_workers,
@@ -204,7 +204,8 @@ class Learner(pl.LightningModule):
         self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def step_agent(self, obs, env, store=False):
-        action = self(obs)
+        with torch.no_grad():
+            action = self(obs)
         next_state, r, is_done, _ = env.step(action)
         # add to buffer
         if store:

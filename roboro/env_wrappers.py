@@ -139,14 +139,18 @@ class StickyActions(gym.Wrapper):
     def __init__(self, env, prob=0.25):
         super().__init__(env)
         self._prob = prob
+        self._last_action = None
 
     def step(self, action):
-        obs, total_reward, done, info = self.env.step(action)
         # repeat action with a small probability
-        if not done and random.random() < self._prob:
-            obs, reward, done, info = self.env.step(action)
-            total_reward += reward
+        if self._last_action is not None and random.random() < self._prob:
+            action = self._last_action
+        obs, total_reward, done, info = self.env.step(action)
         return obs, total_reward, done, info
+
+    def reset(self):
+        self._last_action = None
+        return self.env.reset()
 
 
 class FrameStack(gym.Wrapper):
