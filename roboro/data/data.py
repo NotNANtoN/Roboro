@@ -18,6 +18,7 @@ class RLDataModule(pl.LightningDataModule):
         self.train_env, self.train_dl = None, None
         if train_env is not None:
             self.train_env, self.train_obs = create_env(train_env, **env_kwargs)
+            print(self.train_env)
         if train_ds is not None:
             #self.dev_dataset = create_dl(train_ds)
             #self.train_data, self.val_data = random_split(dev_data, [55000, 5000])

@@ -1,3 +1,4 @@
+import random
 from collections import deque
 
 import gym
@@ -22,7 +23,7 @@ atari_env_names = ['adventure', 'airraid', 'alien', 'amidar', 'assault', 'asteri
               'venture', 'videopinball', 'wizardofwor', 'yars_revenge', 'zaxxon']
 
 
-def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
+def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob, CustomWrapper=None):
     # Init env:
     env = gym.make(env_name)
 
@@ -38,6 +39,8 @@ def create_env(env_name, frameskip, frame_stack, grayscale, CustomWrapper=None):
         env = FrameSkip(env, skip=frameskip)
     if frame_stack > 1:
         env = FrameStack(env, frame_stack)
+    if sticky_action_prob > 0:
+        env = StickyActions(env, sticky_action_prob)
     obs = env.reset()
     return env, obs
 
@@ -127,6 +130,22 @@ class FrameSkip(gym.Wrapper):
             total_reward += reward
             if done:
                 break
+        return obs, total_reward, done, info
+
+
+class StickyActions(gym.Wrapper):
+    """With a small probability, this wrapper applies the current action twice to the env.
+    """
+    def __init__(self, env, prob=0.25):
+        super().__init__(env)
+        self._prob = prob
+
+    def step(self, action):
+        obs, total_reward, done, info = self.env.step(action)
+        # repeat action with a small probability
+        if not done and random.random() < self._prob:
+            obs, reward, done, info = self.env.step(action)
+            total_reward += reward
         return obs, total_reward, done, info
 
 

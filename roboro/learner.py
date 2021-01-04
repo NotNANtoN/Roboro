@@ -45,6 +45,7 @@ class Learner(pl.LightningModule):
                  cer: int = 0,
                  per: int = 0,
 
+                 sticky_action_prob: float = 0.0,
                  frame_stack: int = 0,
                  frameskip: int = 2,
                  grayscale: int = 0,
@@ -64,6 +65,7 @@ class Learner(pl.LightningModule):
                                        test_env, test_ds,
                                        frame_stack=frame_stack,
                                        frameskip=frameskip,
+                                       sticky_action_prob=sticky_action_prob,
                                        grayscale=grayscale,
                                        batch_size=batch_size,
                                        num_workers=num_workers,

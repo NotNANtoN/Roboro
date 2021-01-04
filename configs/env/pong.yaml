@@ -4,6 +4,7 @@ env_steps: 1000000
 
 learner:
   train_env: PongNoFrameskip-v4
+  sticky_action_prob: 0.25
   frame_stack: 4
   frameskip: 4
   grayscale: 1

@@ -21,6 +21,7 @@ opt:
 learner:
   train_env:
   # env wrappers params
+  sticky_action_prob: 0.0
   frame_stack: 0
   frameskip: 0
   grayscale: 0
