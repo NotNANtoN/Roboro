@@ -9,10 +9,10 @@ def create_q(*q_args, double_q=False, soft_q=False, munch_q=False, iqn=False, in
              **policy_kwargs):
     PolicyClass = Q
 
-    if iqn:
-        PolicyClass = create_wrapper(IQN, PolicyClass)
     if double_q:
         PolicyClass = create_wrapper(DoubleQ, PolicyClass)
+    if iqn:
+        PolicyClass = create_wrapper(IQN, PolicyClass)
     if soft_q or munch_q:
         PolicyClass = create_wrapper(SoftQ, PolicyClass)
         if munch_q:
@@ -110,19 +110,21 @@ class IQN(Q):
     def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
         batch_size = obs.shape[0]
 
-        cos, taus = self.target_nets[0].sample_cos(batch_size)
-        num_taus = taus.shape[1]
-
         if next_obs_val is None:
-            next_obs_val = self.next_obs_val(next_obs, cos, taus)
+            next_obs_val = self.next_obs_val(next_obs)
         gammas = self._calc_gammas(done_flags, extra_info)
         # Compute Q targets for current states
         rewards = unsqueeze_to(rewards, next_obs_val)
         gammas = unsqueeze_to(gammas, next_obs_val)
         q_targets = rewards + (gammas * next_obs_val)
-        assert q_targets.shape == (batch_size, 1, num_taus), \
+        assert q_targets.shape == (batch_size, 1, self.num_taus), \
             f"Wrong target shape: {q_targets.shape}"
         return q_targets
+
+    def next_obs_val(self, next_obs, *args, **kwargs):
+        batch_size = next_obs.shape[0]
+        cos, taus = self.target_nets[0].sample_cos(batch_size)
+        return super().next_obs_val(next_obs, cos, taus, *args, **kwargs)
 
     def _get_obs_preds(self, obs, actions):
         batch_size = obs.shape[0]
@@ -328,7 +330,8 @@ class QV(MultiNetPolicy):
         return self.q(obs)
 
     def calc_loss(self, *loss_args):
-        v_next_obs_val = self.v.calc_target_val(*loss_args)
+        next_obs = loss_args[4]
+        v_next_obs_val = self.v.next_obs_val(next_obs)
         loss, abs_tde = self._calc_qv_loss(*loss_args, q_next_obs_val=v_next_obs_val, v_next_obs_val=v_next_obs_val)
         return loss, abs_tde
 
@@ -346,8 +349,9 @@ class QVMax(QV):
         return f'QVMax <{str(self.q)}>'
 
     def calc_loss(self, *loss_args):
-        q_next_obs_val = self.q.calc_target_val(*loss_args)
-        v_next_obs_val = self.v.calc_target_val(*loss_args)
+        next_obs = loss_args[4]
+        q_next_obs_val = self.q.next_obs_val(next_obs)
+        v_next_obs_val = self.v.next_obs_val(next_obs)
         loss, abs_tde = self._calc_qv_loss(*loss_args, q_next_obs_val=v_next_obs_val, v_next_obs_val=q_next_obs_val)
         return loss, abs_tde
 
