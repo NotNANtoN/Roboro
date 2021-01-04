@@ -64,19 +64,19 @@ class Q(Policy):
         self.obs_size = obs_size
         self.act_size = act_size
         self.net_config = net
-        self.net_args = self.net_args()
-        self.net_kwargs = self.net_kwargs()
+        self.net_args = self.get_net_args()
+        self.net_kwargs = self.get_net_kwargs()
         self.q_net = self.create_net()
         self.q_net_target = self.create_net(target=True)
         # Create net lists to update target nets
         self.nets = [self.q_net]
         self.target_nets = [self.q_net_target]
 
-    def net_args(self):
+    def get_net_args(self):
         args = [self.obs_size, self.act_size]
         return args
 
-    def net_kwargs(self):
+    def get_net_kwargs(self):
         kwargs = self.net_config
         return kwargs
 
@@ -132,18 +132,18 @@ class Q(Policy):
         actions = actions.expand(*preds.shape[:-1], 1)
         return preds.gather(dim=-1, index=actions)
 
-    def next_obs_val(self, *args):
+    def next_obs_val(self, next_obs, *args, **kwargs):
         """Calculate the value of the next obs via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
         # Next state action selection
-        max_idcs, q_vals_next = self.next_obs_act_select(*args)
+        max_idcs, q_vals_next = self.next_obs_act_select(next_obs, *args, **kwargs)
         # Next state action evaluation
-        q_vals_next = self.next_obs_act_eval(max_idcs, *args, q_vals_next_eval=q_vals_next)
+        q_vals_next = self.next_obs_act_eval(max_idcs, next_obs, *args, q_vals_next_eval=q_vals_next, **kwargs)
         return q_vals_next
 
-    def next_obs_act_select(self, next_obs, use_target_net=True):
+    def next_obs_act_select(self, next_obs, *args, use_target_net=True, **kwargs):
         # Next state action selection
-        q_vals_next = self.q_pred_next_state(next_obs, use_target_net=use_target_net)
+        q_vals_next = self.q_pred_next_state(next_obs, *args, use_target_net=use_target_net, **kwargs)
         max_idcs = torch.argmax(q_vals_next, dim=1, keepdim=True)
         return max_idcs, q_vals_next
 
@@ -178,13 +178,13 @@ class V(Q):
         """Instead of gathering the prediction according to the actions, simply return the predictions"""
         return preds
 
-    def net_args(self):
-        args = super().net_args()
+    def get_net_args(self):
+        args = super().get_net_args()
         args[1] = 1  # set act_size to 1
         return args
 
-    def net_kwargs(self):
-        kwargs = super().net_kwargs()
+    def get_net_kwargs(self):
+        kwargs = super().get_net_kwargs()
         with open_dict(kwargs):
             del kwargs['dueling']
         return kwargs

@@ -66,8 +66,8 @@ class IQN(Q):
         self.num_policy_samples = num_policy_samples
         super().__init__(*args, **kwargs)
 
-    def net_args(self):
-        args = super().net_args()
+    def get_net_args(self):
+        args = super().get_net_args()
         args = args + [self.num_tau, self.num_policy_samples]
         return args
 
@@ -132,21 +132,20 @@ class IQN(Q):
         chosen_action_q_vals = self._gather_obs(q_k, actions)
         return chosen_action_q_vals, taus
 
-    def next_obs_act_select(self, next_obs, cos, taus, use_target_net=True):
+    def next_obs_act_select(self, next_obs, *args, use_target_net=True, **kwargs):
         # Next state action selection
-        batch_size = next_obs.shape[0]
-        num_taus = taus.shape[1]
-        q_quants_next = self.q_pred_next_state(next_obs, cos, taus, use_target_net=use_target_net)
+        q_quants_next = self.q_pred_next_state(next_obs, *args, use_target_net=use_target_net, **kwargs)
         exp_q_next = q_quants_next.mean(dim=1)
         # Get max predicted Q values (for next states) from target model
         max_idcs = torch.argmax(exp_q_next, dim=1, keepdim=True)
-        # Bring in same shape as q_targets_next:
-        max_idcs = max_idcs.unsqueeze(-1).expand(batch_size, num_taus, 1)
+        # Bring in simiar shape as q_quants_next (except last dim):
+        max_idcs = unsqueeze_to(max_idcs, q_quants_next)
+        max_idcs = max_idcs.expand(*q_quants_next.shape[:-1], 1)
         return max_idcs, q_quants_next
 
-    def next_obs_act_eval(self, max_idcs, next_obs, cos, taus, q_vals_next_eval=None, use_target_net=True):
+    def next_obs_act_eval(self, max_idcs, next_obs, *args, q_vals_next_eval=None, use_target_net=True, **kwargs):
         if q_vals_next_eval is None:
-            q_vals_next_eval = self.q_pred_next_state(next_obs, cos, taus, use_target_net=use_target_net)
+            q_vals_next_eval = self.q_pred_next_state(next_obs, *args, use_target_net=use_target_net, **kwargs)
         # Take max actions
         q_vals_next = q_vals_next_eval.gather(dim=-1, index=max_idcs).transpose(1, 2)
         return q_vals_next
