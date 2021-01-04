@@ -7,19 +7,18 @@ from roboro.data.segment_tree import SumSegmentTree, MinSegmentTree
 from roboro.utils import create_wrapper
 
 
-def create_buffer(buffer_size, n_step, per, cer, gamma):
+def create_buffer(gamma, buffer_size=100000, n_step=0, per=0, cer=0, **buffer_kwargs):
     # Create replay buffer
-    update_freq = 0
     buffer_args = [buffer_size]
-    buffer_kwargs = {'update_freq': update_freq}
+    #buffer_kwargs.update{'update_freq': update_freq}
     BufferClass = RLBuffer
     if per:
         BufferClass = create_wrapper(PER, BufferClass)
-        buffer_kwargs.update({'beta_start': 0.4,
-                              'alpha': 0.6})
+        #buffer_kwargs.update({'beta_start': 0.4,
+        #                      'alpha': 0.6})
     if n_step > 1:
         BufferClass = create_wrapper(NStep, BufferClass)
-        buffer_kwargs.update({'n_step': n_step,
+        buffer_kwargs.update({#'n_step': n_step,
                               'gamma': gamma})
     if cer:
         BufferClass = create_wrapper(CER, BufferClass)
@@ -33,6 +32,7 @@ class PER(RLBuffer):
         self.alpha = alpha
         self.max_priority = max_priority
         self.running_avg = running_avg
+        self.beta_start = beta_start
         self.beta = beta_start
         self.max_weight = None
         # Create Sum tres:
@@ -147,12 +147,13 @@ class PER(RLBuffer):
         self._it_sum[idx] = self.max_priority ** self.alpha
         self._it_min[idx] = self.max_priority ** self.alpha
 
-    def update(self, steps, extra_info):
+    def update(self, train_frac, extra_info):
         """ PER weight update, PER beta update"""
         buff_idcs = extra_info["idx"]
         tde = extra_info["tde"]
         self.update_priorities(buff_idcs, tde)
         self.calc_and_save_max_weight()
+        self.beta = self.beta_start + (1 - self.beta_start) * train_frac
 
 
 class NStep(RLBuffer):

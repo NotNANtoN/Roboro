@@ -93,7 +93,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def is_end(self, idx):
         return self.dones[idx] or idx == self.size()
 
-    def update(self, steps, extra_info):
+    def update(self, train_frac, extra_info):
         """ PER weight update, PER beta update etc can happen here"""
         pass
 

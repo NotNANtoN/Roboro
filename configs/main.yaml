@@ -29,13 +29,18 @@ learner:
   steps_per_batch: 1
   batch_size: 32
   num_workers: 0
-  # buffer params
   warm_start_size: 1000
+
+buffer:
+  # buffer params
+  update_freq: 0
   buffer_size: 100000
   n_step: 0
   cer: 0
   per: 0
-
+  # per args
+  alpha: 0.6
+  beta_start: 0.4
 
 agent:
   # policy selection

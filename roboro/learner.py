@@ -38,25 +38,22 @@ class Learner(pl.LightningModule):
                  batch_size: int = 32,
                  num_workers: int = 0,
 
+                 buffer_conf: DictConfig = None,
                  warm_start_size: int = 1000,
                  steps_per_batch: int = 1,
-                 buffer_size: int = 100000,
-                 n_step: int = 1,
-                 cer: int = 0,
-                 per: int = 0,
 
                  sticky_actions: float = 0.0,
                  frame_stack: int = 0,
                  frameskip: int = 2,
                  grayscale: int = 0,
 
-                 agent_args: DictConfig = None,
-                 opt_args: DictConfig = None
+                 agent_conf: DictConfig = None,
+                 opt_conf: DictConfig = None
                  ):
         super().__init__()
         self.save_hyperparameters()
         # Create replay buffer
-        self.buffer = create_buffer(buffer_size, n_step, per, cer, agent_args.policy.gamma)
+        self.buffer = create_buffer(agent_conf.policy.gamma, **buffer_conf)
         print("Buffer: ", self.buffer)
         # Create envs and dataloaders
         self.datamodule = RLDataModule(self.buffer,
@@ -75,10 +72,11 @@ class Learner(pl.LightningModule):
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
         self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
-                           warm_start_steps=warm_start_size, **agent_args)
+                           warm_start_steps=warm_start_size, **agent_conf)
         #print(self.agent)
 
         # init counters
+        self.max_steps = steps
         self.total_steps = 0
         self.total_eps = 0
         self.epoch_steps = 0
@@ -89,7 +87,7 @@ class Learner(pl.LightningModule):
         self.n_evals = 0
 
         # tracking hyperparams:
-        self.steps_per_epoch = min(max(steps / 100, 500), 20000)
+        self.steps_per_epoch = min(max(self.max_steps / 100, 500), 20000)
         print("Steps per epoch: ", self.steps_per_epoch)
         self.steps_per_batch = steps_per_batch
 
@@ -99,9 +97,9 @@ class Learner(pl.LightningModule):
         self.frameskip = frameskip  # need to store here to keep track of real number of env interactions
 
         # optimizer hyperparams:
-        self.opt_name = opt_args.name
-        self.lr = opt_args.lr
-        self.opt_eps = opt_args.eps
+        self.opt_name = opt_conf.name
+        self.lr = opt_conf.lr
+        self.opt_eps = opt_conf.eps
 
     def forward(self, obs: torch.Tensor) -> int:
         obs = obs.to(self.device, self.dtype).unsqueeze(0)
@@ -159,7 +157,7 @@ class Learner(pl.LightningModule):
         # update target nets, epsilon, etc:
         self.agent.update_self(self.total_steps)
         # update buffer
-        self.buffer.update(self.total_steps, extra_info)
+        self.buffer.update(self.total_steps / self.max_steps, extra_info)
         # log metrics
         self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log('eps', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)

@@ -45,21 +45,22 @@ def test_agent(agent, env, render=False):
 
 
 @hydra.main(config_name="main", config_path="configs")
-def main(args: DictConfig):
+def main(conf: DictConfig):
     # Deal with args
     print("Args:")
-    print(OmegaConf.to_yaml(args))
+    print(OmegaConf.to_yaml(conf))
     # keep original working directory for mlflow etc
     os.chdir(hydra.utils.get_original_cwd())
-    learner_args = args.learner
-    trainer_args = args.trainer
+    learner_args = conf.learner
+    trainer_args = conf.trainer
     # Create agent and learner
-    if args.path is not None:
+    if conf.path is not None:
         # load from checkpoint
-        learner = Learner.load_from_checkpoint(args.path)
+        learner = Learner.load_from_checkpoint(conf.path)
     else:
         # create from scratch
-        learner = Learner(steps=args.env_steps, agent_args=args.agent, opt_args=args.opt, **learner_args)
+        learner = Learner(steps=conf.env_steps, agent_conf=conf.agent, opt_conf=conf.opt,
+                          buffer_conf=conf.buffer, **learner_args)
         # Do the training!
         current_time = time.strftime('%d-%h_%H:%M:%S', time.gmtime())
         checkpoint_callback = ModelCheckpoint(
@@ -69,8 +70,8 @@ def main(args: DictConfig):
             save_top_k=3,
             mode='max')
         # Set up mlflowlogger
-        exp_name = args.learner.train_env if args.learner.train_env is not None else args.learner.train_ds
-        ovargs = args.override_args
+        exp_name = conf.learner.train_env if conf.learner.train_env is not None else conf.learner.train_ds
+        ovargs = conf.override_args
         ovargs = filter_out_env_override(ovargs)
         print(exp_name, ovargs)
         mlf_logger = MLFlowLogger(experiment_name=exp_name,
@@ -86,13 +87,13 @@ def main(args: DictConfig):
 
         # Apply seed if wanted
         deterministic = False
-        if args.seed is not None:
-            seed_everything(args.seed)
+        if conf.seed is not None:
+            seed_everything(conf.seed)
             deterministic = True
         # Calculate number of training batches based off maximal number of env steps
         frameskip = learner_args.frameskip if learner_args.frameskip > 0 else 1
-        max_batches = args.env_steps / frameskip / learner_args.steps_per_batch
-        print("Number of env steps to train on: ", args.env_steps)
+        max_batches = conf.env_steps / frameskip / learner_args.steps_per_batch
+        print("Number of env steps to train on: ", conf.env_steps)
         print("Number of batches to train on: ",max_batches)
         trainer = Trainer(max_steps=max_batches,
                           gpus=1 if torch.cuda.is_available() else 0,
@@ -109,10 +110,10 @@ def main(args: DictConfig):
     # Get train env:
     env = learner.train_env
     # Test agent using internal function:
-    total_return = learner.run(env, n_steps=0, n_eps=10, render=args.render)
+    total_return = learner.run(env, n_steps=0, n_eps=10, render=conf.render)
     print("Avg return from internal run function: ", sum(total_return) / len(total_return))
     # Test the agent after training:
-    total_return = test_agent(learner, env, render=args.render)
+    total_return = test_agent(learner, env, render=conf.render)
     print("Return of learner: ", total_return)
 
 
