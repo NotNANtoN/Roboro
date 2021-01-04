@@ -38,9 +38,9 @@ buffer:
   n_step: 0
   cer: 0
   per: 0
-  # per args
-  alpha: 0.6
-  beta_start: 0.4
+  # per args - commented out until we figured out a good way to combine configs in a binary way
+  # alpha: 0.6
+  # beta_start: 0.4
 
 agent:
   # policy selection
