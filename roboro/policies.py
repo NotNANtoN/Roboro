@@ -117,7 +117,7 @@ class IQN(Q):
         rewards = unsqueeze_to(rewards, next_obs_val)
         gammas = unsqueeze_to(gammas, next_obs_val)
         q_targets = rewards + (gammas * next_obs_val)
-        assert q_targets.shape == (batch_size, 1, self.num_taus), \
+        assert q_targets.shape == (batch_size, 1, self.num_tau), \
             f"Wrong target shape: {q_targets.shape}"
         return q_targets
 
@@ -216,6 +216,7 @@ class InternalEnsemble(Q):
         else:
             nets = self.nets
         pred_next = super().q_pred_next_state
+        #print(args, kwargs)
         preds = torch.stack([pred_next(next_obs, *args, net=net, **kwargs) for net in nets])
         pred = self.agg_preds(preds)
         return pred
@@ -240,20 +241,22 @@ class REM(InternalEnsemble):
     def __str__(self):
         return f'REM_{self.size} <{super().__str__()}>'
 
-    def calc_loss(self, *args, **kwargs):
-        obs = args[0]
+    def calc_loss(self, obs, *args, **kwargs):
         if self.alphas is None:
             self.alphas = self.gen_alphas(obs)
-        loss = super().calc_loss(*args, **kwargs)
+        loss = super().calc_loss(obs, *args, **kwargs)
         self.alphas = None
         return loss
 
-    def calc_target_val(self, *args, **kwargs):
-        obs = args[0]
+    def obs_val(self, obs, *args, **kwargs):
         if self.alphas is None:
             self.alphas = self.gen_alphas(obs)
-        loss = super().calc_target_val(*args, **kwargs)
-        return loss
+        return super().obs_val(obs, *args, **kwargs)
+
+    def next_obs_val(self, next_obs, *args, **kwargs):
+        if self.alphas is None:
+            self.alphas = self.gen_alphas(next_obs)
+        return super().next_obs_val(next_obs, *args, **kwargs)
 
     def gen_alphas(self, obs):
         alphas = torch.rand(self.size, device=obs.device, dtype=obs.dtype)
@@ -300,9 +303,8 @@ class MunchQ(SoftQ):
         return f'Munchausen_{self.alpha} <{super().__str__()}>'
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, *args, **kwargs):
-        q_targets = super(MunchQ, self).calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info, *args,
-                                                        **kwargs)
+    def calc_target_val(self, obs, actions, *args, **kwargs):
+        q_targets = super(MunchQ, self).calc_target_val(obs, actions, *args, **kwargs)
         q_vals = self.forward_target(obs)
         munch_reward = self._calc_entropy(q_vals)
         actions = unsqueeze_to(actions, munch_reward)
