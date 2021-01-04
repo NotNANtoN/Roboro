@@ -220,7 +220,7 @@ class InternalEnsemble(Q):
 
     def obs_val(self, obs, *args, **kwargs):
         obs_func = super().obs_val
-        #print(obs_func(obs, *args, net=self.nets[0], **kwargs))
+        # print(obs_func(obs, *args, net=self.nets[0], **kwargs))
         preds = torch.stack([obs_func(obs, *args, net=net, **kwargs) for net in self.nets])
         pred = self.agg_preds(preds)
         return pred
@@ -346,9 +346,9 @@ class QVMax(QV):
         return f'QVMax <{str(self.q)}>'
 
     def calc_loss(self, *loss_args):
-        q_target = self.q.calc_target_val(*loss_args)
-        v_target = self.v.calc_target_val(*loss_args)
-        loss, abs_tde = self._calc_qv_loss(*loss_args, q_target=v_target, v_target=q_target)
+        q_next_obs_val = self.q.calc_target_val(*loss_args)
+        v_next_obs_val = self.v.calc_target_val(*loss_args)
+        loss, abs_tde = self._calc_qv_loss(*loss_args, q_next_obs_val=v_next_obs_val, v_next_obs_val=q_next_obs_val)
         return loss, abs_tde
 
 
