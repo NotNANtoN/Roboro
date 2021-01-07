@@ -51,7 +51,7 @@ class Standardizer(torch.nn.Module):
         super().__init__()
         self.record_steps = record_steps
         self.register_buffer("mean", torch.tensor(0))
-        self.register_buffer("std", torch.tensor(0))
+        self.register_buffer("std", torch.tensor(1))
         self.register_buffer("run_var", torch.tensor(0))
         self.register_buffer("n", torch.tensor(0))
 
@@ -67,9 +67,11 @@ class Standardizer(torch.nn.Module):
         else:
             new_mean = self.mean + (obs - self.mean) / self.n
             self.run_var = self.run_var + (obs - new_mean) * (obs - self.mean)
-            var = self.run_var / (self.n - 1) if self.n > 1 else torch.tensor(1)
-            self.std = torch.sqrt(var) if self.n > 1 else torch.tensor(1)
+            var = self.run_var / (self.n - 1) if self.n > 1 else torch.tensor(1).type_as(obs)
+            self.std = torch.sqrt(var)
             self.mean = new_mean
+            # Some inputs features (e.g. pixels) might never change
+            self.std[self.std == 0] = 1
 
     def norm(self, obs):
         standardized_obs = (obs - self.mean) / self.std
