@@ -178,9 +178,11 @@ class NStep(RLBuffer):
         """ For n-step add rewards of discounted next n steps to current reward"""
         n_step_reward = 0
         count = 0
-        for count, step_reward in enumerate(self.rewards[idx: idx + self.n_step]):
+        for count in range(self.n_step):
+            step_idx = idx + count
+            step_reward = super().get_reward(step_idx)
             n_step_reward += step_reward * self.gamma ** count
-            if self.dones[idx + count]:
+            if self.dones[step_idx]:
                 break
         self.n_step_used = count + 1
         return n_step_reward

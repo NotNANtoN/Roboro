@@ -10,7 +10,7 @@ env_steps: 10000
 
 trainer:
 #  weights_summary: "full"
-  gradient_clip_val: 0.5
+  gradient_clip_val: 0  # 0 means don't clip
   terminate_on_nan: 0  # Needs to be 0 - otherwise this takes up a third of training time!
   precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
 

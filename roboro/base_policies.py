@@ -71,6 +71,7 @@ class Q(Policy):
         # Create net lists to update target nets
         self.nets = [self.q_net]
         self.target_nets = [self.q_net_target]
+        self.loss_fnc = torch.nn.MSELoss(reduction='none')
 
     def get_net_args(self):
         args = [self.obs_size, self.act_size]
@@ -102,7 +103,7 @@ class Q(Policy):
                                        next_obs_val=next_obs_val)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = (targets - preds)
-        loss = tde.pow(2)
+        loss = self.loss_fnc(targets, preds)
         if "sample_weight" in extra_info:
             loss *= extra_info["sample_weight"]
         return loss.mean(), abs(tde)
@@ -113,6 +114,7 @@ class Q(Policy):
             next_obs_val = self.next_obs_val(next_obs)
         assert next_obs_val.shape == rewards.shape
         gammas = self._calc_gammas(done_flags, extra_info)
+
         targets = rewards + gammas * next_obs_val
         return targets
 
