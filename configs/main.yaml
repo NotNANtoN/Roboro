@@ -53,6 +53,7 @@ agent:
   int_ens: 0
   rem: 0
   # learn alg params
+  clip_rewards: 0
   eps_start: 0.1
   # feature extraction net params
   feat_layer_width: 256

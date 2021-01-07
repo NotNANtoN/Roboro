@@ -28,6 +28,7 @@ class Agent(torch.nn.Module):
                  int_ens: bool = False,
                  rem: bool = False,
 
+                 clip_rewards: bool = False,
                  eps_start: float = 0.1,
                  target_net_hard_steps: int = 1000,
                  target_net_polyak_val: float = 0.99,
@@ -43,6 +44,7 @@ class Agent(torch.nn.Module):
         self.target_net_hard_steps = target_net_hard_steps
         self.target_net_polyak_val = target_net_polyak_val
         self.target_net_use_polyak = target_net_use_polyak
+        self.clip_rewards = clip_rewards
         # Get in-out shapes:
         obs_sample = obs_space.sample()
         obs_shape = obs_sample.shape
@@ -87,6 +89,8 @@ class Agent(torch.nn.Module):
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info):
         assert done_flags.dtype == torch.bool
+        if self.clip_rewards:
+            rewards = torch.sign(rewards)
         obs_feats = self.extract_features(obs)
         next_obs_feats = self.extract_features(next_obs)
         loss, tde = self.policy.calc_loss(obs_feats, actions, rewards, done_flags, next_obs_feats, extra_info)
