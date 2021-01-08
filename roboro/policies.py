@@ -172,7 +172,7 @@ class IQN(Q):
 
 class DoubleQ(Q):
     def __str__(self):
-        return f'Double <{super().__str__()}>'
+        return f'Double<{super().__str__()}>'
 
     def next_obs_val(self, *args, **kwargs):
         """Calculate the value of the next obs according to the double Q learning rule.
@@ -196,7 +196,7 @@ class InternalEnsemble(Q):
         self.target_nets = torch.nn.ModuleList(self.create_net(target=True) for _ in range(size))
 
     def __str__(self):
-        return f'IntEns_{self.size} <{super().__str__()}>'
+        return f'IntEns_{self.size}<{super().__str__()}>'
 
     def forward(self, obs):
         preds = torch.stack([pol(obs) for pol in self.nets])
@@ -239,7 +239,7 @@ class REM(InternalEnsemble):
         self.alphas = None
 
     def __str__(self):
-        return f'REM_{self.size} <{super().__str__()}>'
+        return f'REM_{self.size}<{super().__str__()}>'
 
     def calc_loss(self, obs, *args, **kwargs):
         if self.alphas is None:
@@ -280,7 +280,7 @@ class SoftQ(Q):
         self.l0 = l0
 
     def __str__(self):
-        return f'Soft_{self.tau}_{self.l0} <{super().__str__()}>'
+        return f'Soft_{self.tau}_{self.l0}<{super().__str__()}>'
 
     @torch.no_grad()
     def q_pred_next_state(self, next_obs, *args, use_target_net=True, **kwargs):
@@ -300,7 +300,7 @@ class MunchQ(SoftQ):
         self.alpha = alpha
 
     def __str__(self):
-        return f'Munchausen_{self.alpha} <{super().__str__()}>'
+        return f'Munchausen_{self.alpha}<{super().__str__()}>'
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, *args, **kwargs):
@@ -326,7 +326,7 @@ class QV(MultiNetPolicy):
         self.policies = [self.v, self.q]
 
     def __str__(self):
-        return f'QV <{str(self.q)}>'
+        return f'QV<{str(self.q)}>'
 
     def forward(self, obs):
         return self.q(obs)

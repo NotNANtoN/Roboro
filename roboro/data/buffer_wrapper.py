@@ -46,6 +46,9 @@ class PER(RLBuffer):
         self.looped = False
         #
         self.tree_sum = None
+        
+    def __str__(self):
+        return f'PER{self.alpha}_{self.beta_start}<{super().__str__()}>'
 
     def __getitem__(self, buff_idx):
         #print("sample idx: ", buff_idx)
@@ -164,7 +167,7 @@ class NStep(RLBuffer):
         self.n_step_used = None
 
     def __str__(self):
-        return f'NStep{self.n_step} <{super().__str__()}>'
+        return f'NStep{self.n_step}<{super().__str__()}>'
 
     def __getitem__(self, idx):
         out = super().__getitem__(idx)
@@ -204,7 +207,7 @@ class CER(RLBuffer):
         self.new_batch = True
 
     def __str__(self):
-        return f'CER <{super().__str__()}>'
+        return f'CER<{super().__str__()}>'
 
     def __getitem__(self, idx):
         # overwrite index to be the most recently added index of the buffer at the start of a new batch
