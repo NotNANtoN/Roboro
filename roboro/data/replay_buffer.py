@@ -98,6 +98,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def update(self, train_frac, extra_info):
         """ PER weight update, PER beta update etc can happen here"""
         idcs = extra_info.pop("idx")
+        del extra_info["tde"]
         for count, buffer_idx in enumerate(idcs):
             for key in extra_info:
                 val = extra_info[key][count]
