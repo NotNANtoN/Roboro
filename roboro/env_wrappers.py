@@ -33,7 +33,10 @@ def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob, 
     if any(atari_name in env_name.lower() for atari_name in atari_env_names):
         env = AtariObsWrapper(env)
     if grayscale:
-        env = ToGrayScale(env)
+        if len(env.observation_space.shape) == 3:
+            env = ToGrayScale(env)
+        else:
+            print("Warning: Attempted to apply Grayscale wrapper to env without RGB space! Wrapper skipped.")
     env = ToTensor(env)
     if frameskip > 1:
         env = FrameSkip(env, skip=frameskip)
@@ -67,7 +70,6 @@ class ToGrayScale(gym.ObservationWrapper):
     def setup(self, obs_space):
         """Select dimension over which to take the mean"""
         obs_shape = obs_space.shape
-        assert len(obs_shape) == 3
         self.dtype = obs_space.dtype
         if obs_shape[0] == 3:
             self.mean_dim = 0

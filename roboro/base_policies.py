@@ -103,7 +103,9 @@ class Q(Policy):
                                        next_obs_val=next_obs_val)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = (targets - preds)
-        loss = self.loss_fnc(targets, preds)
+        loss = self.loss_fnc(preds, targets)
+        # TODO: maybe calc huber loss here??
+        #loss = (tde ** 2).mean()
         if "sample_weight" in extra_info:
             loss *= extra_info["sample_weight"]
         return loss.mean(), abs(tde)

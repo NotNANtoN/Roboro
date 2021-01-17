@@ -29,6 +29,9 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.actions = SliceableDeque(maxlen=max_size)
         self.dones = SliceableDeque(maxlen=max_size)
         self.extra_info = defaultdict(SliceableDeque)
+        # TODO: change from SliceableDeque to simple list and keep track of current index (add incr and decr methods)
+        #  this removes the difference between tree_idx and buffer_idx in PER (this avoids bugs and make the programming
+        #  simpler)
 
         # Can bet set from the outside to determine the end of an epoch
         self.should_stop = False
