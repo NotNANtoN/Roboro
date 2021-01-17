@@ -16,11 +16,10 @@ class SliceableDeque(deque):
 
 
 class RLBuffer(torch.utils.data.IterableDataset):
-    def __init__(self, max_size, update_freq=0, n_step=0, gamma=0.99):
+    def __init__(self, max_size, update_freq=0, gamma=0.99):
         super().__init__()
         self.max_size = max_size
         self.update_freq = update_freq
-        self.n_step = n_step
         self.gamma = gamma
         self.dtype = torch.float32  # can be overridden by trainer to be float16
         # Storage fields

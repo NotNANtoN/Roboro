@@ -2,7 +2,7 @@ import torch
 from omegaconf import DictConfig, open_dict
 
 from roboro.networks import MLP
-from roboro.utils import polyak_update, copy_weights, freeze_params, unsqueeze_to
+from roboro.utils import polyak_update, copy_weights, freeze_params, unsqueeze_to, calculate_huber_loss
 
 
 class Policy(torch.nn.Module):
@@ -103,9 +103,8 @@ class Q(Policy):
                                        next_obs_val=next_obs_val)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = (targets - preds)
-        loss = self.loss_fnc(preds, targets)
-        # TODO: maybe calc huber loss here??
-        #loss = (tde ** 2).mean()
+        loss = calculate_huber_loss(tde)
+        # loss = self.loss_fnc(preds, targets)
         if "sample_weight" in extra_info:
             loss *= extra_info["sample_weight"]
         return loss.mean(), abs(tde)
