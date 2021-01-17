@@ -107,12 +107,12 @@ class IQN(Q):
         return loss, td_error.sum(dim=1).mean(dim=1)
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, next_obs_val=None):
         batch_size = obs.shape[0]
 
         if next_obs_val is None:
             next_obs_val = self.next_obs_val(next_obs)
-        gammas = self._calc_gammas(done_flags, extra_info)
+        gammas = self._calc_gammas(done_flags)
         # Compute Q targets for current states
         rewards = unsqueeze_to(rewards, next_obs_val)
         gammas = unsqueeze_to(gammas, next_obs_val)

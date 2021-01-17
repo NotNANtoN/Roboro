@@ -20,13 +20,9 @@ class Policy(torch.nn.Module):
     def __str__(self):
         return f'Policy_{self.gamma}'
 
-    def _calc_gammas(self, done_flags, extra_info):
+    def _calc_gammas(self, done_flags):
         """Apply the discount factor. If a done flag is set we discount by 0."""
-        gammas = (~done_flags).float().squeeze()
-        if "n_step" in extra_info:
-            gammas *= self.gamma ** extra_info["n_step"]
-        else:
-            gammas *= self.gamma
+        gammas = (~done_flags).float().squeeze() * self.gamma
         return gammas
 
     def update_target_nets_hard(self):
@@ -99,8 +95,7 @@ class Q(Policy):
 
     def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
         preds = self._get_obs_preds(obs, actions)
-        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info,
-                                       next_obs_val=next_obs_val)
+        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, next_obs_val=next_obs_val)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = (targets - preds)
         loss = calculate_huber_loss(tde)
@@ -110,11 +105,11 @@ class Q(Policy):
         return loss.mean(), abs(tde)
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
+    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, next_obs_val=None):
         if next_obs_val is None:
             next_obs_val = self.next_obs_val(next_obs)
         assert next_obs_val.shape == rewards.shape
-        gammas = self._calc_gammas(done_flags, extra_info)
+        gammas = self._calc_gammas(done_flags)
 
         targets = rewards + gammas * next_obs_val
         return targets

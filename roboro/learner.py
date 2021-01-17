@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch.optim.optimizer import Optimizer
-from omegaconf import DictConfig
+from omegaconf import DictConfig, open_dict
 
 from roboro.agent import Agent
 from roboro.data import RLDataModule, create_buffer
@@ -53,7 +53,9 @@ class Learner(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         # Create replay buffer
-        self.buffer = create_buffer(agent_conf.policy.gamma, **buffer_conf)
+        self.buffer, new_gamma = create_buffer(agent_conf.policy.gamma, **buffer_conf)
+        with open_dict(agent_conf):
+            agent_conf.policy.gamma = new_gamma
         print("Buffer: ", self.buffer)
         # Create envs and dataloaders
         self.datamodule = RLDataModule(self.buffer,

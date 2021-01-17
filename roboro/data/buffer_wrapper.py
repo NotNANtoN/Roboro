@@ -20,10 +20,11 @@ def create_buffer(gamma, buffer_size=100000, n_step=0, per=0, cer=0, **buffer_kw
         BufferClass = create_wrapper(NStep, BufferClass)
         buffer_kwargs.update({'n_step': n_step,
                               'gamma': gamma})
+        gamma = gamma ** n_step
     if cer:
         BufferClass = create_wrapper(CER, BufferClass)
     buffer = BufferClass(*buffer_args, **buffer_kwargs)
-    return buffer
+    return buffer, gamma
 
 
 class PER(RLBuffer):
@@ -126,18 +127,9 @@ class NStep(RLBuffer):
         super().__init__(*args, **kwargs)
         self.n_step = n_step
         self.gamma = gamma
-        self.n_step_used = None
 
     def __str__(self):
         return f'NStep{self.n_step}<{super().__str__()}>'
-
-    def __getitem__(self, idx):
-        out = super().__getitem__(idx)
-        extra_info = out[-1]
-        assert self.n_step_used is not None, "get_reward() was not called, so number of steps per sample not known!"
-        extra_info["n_step"] = self.n_step_used
-        self.n_step_used = None
-        return out
 
     def get_reward(self, idx):
         """ For n-step add rewards of discounted next n steps to current reward"""
@@ -149,7 +141,6 @@ class NStep(RLBuffer):
             n_step_reward += step_reward * self.gamma ** count
             if self.is_end(step_idx):
                 break
-        self.n_step_used = step_idx - idx
         return n_step_reward
 
     def get_next_state(self, idx, state):
@@ -159,10 +150,6 @@ class NStep(RLBuffer):
                 break
             n_step_idx = self.incr_idx(n_step_idx)
         return super().get_next_state(n_step_idx, state)
-
-    def update(self, steps, extra_info):
-        del extra_info["n_step"]
-        return super().update(steps, extra_info)
 
 
 class CER(RLBuffer):
