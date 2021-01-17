@@ -80,7 +80,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
 
     def get_reward(self, idx):
         """ Method that can be overridden by subclasses"""
-        return torch.tensor(self.rewards[idx], dtype=torch.float)
+        return float(self.rewards[idx])
+        #return torch.tensor(self.rewards[idx], dtype=torch.float)
 
     def get_next_state(self, idx, state):
         """ Method that can be overridden by subclasses"""
@@ -96,7 +97,16 @@ class RLBuffer(torch.utils.data.IterableDataset):
 
     def update(self, train_frac, extra_info):
         """ PER weight update, PER beta update etc can happen here"""
-        pass
+        idcs = extra_info.pop("idx")
+        for count, buffer_idx in enumerate(idcs):
+            for key in extra_info:
+                val = extra_info[key][count]
+                self.add_extra_field(key, buffer_idx, val)
+
+    def add_extra_field(self, key, idx, val):
+        while len(self.extra_info[key]) < self.size() + 1:
+            self.extra_info[key].append(torch.tensor(0))
+        self.extra_info[key][idx] = val
 
     def move(self, obs):
         # Stack LazyFrames frames and convert to correct type (for half precision compatibility):

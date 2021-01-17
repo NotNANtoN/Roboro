@@ -18,7 +18,7 @@ def create_buffer(gamma, buffer_size=100000, n_step=0, per=0, cer=0, **buffer_kw
         #                      'alpha': 0.6})
     if n_step > 1:
         BufferClass = create_wrapper(NStep, BufferClass)
-        buffer_kwargs.update({#'n_step': n_step,
+        buffer_kwargs.update({'n_step': n_step,
                               'gamma': gamma})
     if cer:
         BufferClass = create_wrapper(CER, BufferClass)
@@ -118,6 +118,7 @@ class PER(RLBuffer):
         self.update_priorities(idcs, tde)
         self.calc_and_save_max_weight()
         self.beta = self.beta_start + (1 - self.beta_start) * train_frac
+        super().update(train_frac, extra_info)
 
 
 class NStep(RLBuffer):
@@ -141,7 +142,6 @@ class NStep(RLBuffer):
     def get_reward(self, idx):
         """ For n-step add rewards of discounted next n steps to current reward"""
         n_step_reward = 0
-        count = 0
         step_idx = idx
         for count in range(self.n_step):
             step_reward = super().get_reward(step_idx)
@@ -149,7 +149,7 @@ class NStep(RLBuffer):
             n_step_reward += step_reward * self.gamma ** count
             if self.is_end(step_idx):
                 break
-        self.n_step_used = count + 1
+        self.n_step_used = step_idx - idx
         return n_step_reward
 
     def get_next_state(self, idx, state):
@@ -159,6 +159,10 @@ class NStep(RLBuffer):
                 break
             n_step_idx = self.incr_idx(n_step_idx)
         return super().get_next_state(n_step_idx, state)
+
+    def update(self, steps, extra_info):
+        del extra_info["n_step"]
+        return super().update(steps, extra_info)
 
 
 class CER(RLBuffer):
