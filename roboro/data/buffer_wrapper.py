@@ -41,85 +41,46 @@ class PER(RLBuffer):
             it_capacity *= 2
         self._it_sum = SumSegmentTree(it_capacity)
         self._it_min = MinSegmentTree(it_capacity)
-        # To translate idcs of buffer to tree and vice versa
-        self.buff_count = 0  # counts entries to map buffer idcs to tree idcs
-        self.looped = False
-        #
+        # caches tree sum during sampling of a batch
         self.tree_sum = None
         
     def __str__(self):
         return f'PER{self.alpha}_{self.beta_start}<{super().__str__()}>'
 
-    def __getitem__(self, buff_idx):
-        #print("sample idx: ", buff_idx)
-        out = super().__getitem__(buff_idx)
-        tree_idx = self.buff_to_tree_idx(buff_idx)
-        weight = self._calc_weight(tree_idx)
+    def __getitem__(self, idx):
+        out = super().__getitem__(idx)
+        weight = self._calc_weight(idx)
         extra_info = out[-1]
         extra_info["sample_weight"] = weight
         return out
 
     def add(self, *args, **kwargs):
+        self._set_priority_of_new_exp(self.head)
         super().add(*args, **kwargs)
-
-        self.incr_count()
-
-        buff_idx = self.size()
-        tree_idx = self.buff_to_tree_idx(buff_idx)
-        self._set_priority_of_new_exp(tree_idx)
-
-    def incr_count(self):
-        self.buff_count += 1
-        if self.buff_count == self.max_size:
-            self.looped = True
-            self.buff_count = 0
 
     def sample_idx(self):
         if self.tree_sum is None:
             self.calc_and_save_max_weight()
         mass = random.random() * self.tree_sum  #self._it_sum.sum(0, self.size() + 1)
-        tree_idx = self._it_sum.find_prefixsum_idx(mass)
-        buff_idx = self.tree_to_buff_idx(tree_idx)
-        if buff_idx == self.size():
-            buff_idx -= 1
-        assert buff_idx < self.size(), f"{buff_idx}"
-
-        #print("rand idcs: ", tree_idx, buff_idx)
-        #print("size, buffcount: ", self.size(), self.buff_count)
-        #print("buff back and forth: ", buff_idx, self.tree_to_buff_idx(self.buff_to_tree_idx(buff_idx)))
-        #print("tree back and forth: ", tree_idx, self.buff_to_tree_idx(self.tree_to_buff_idx(tree_idx)))
-        return buff_idx
-
-    def buff_to_tree_idx(self, idx):
-        idx = (idx + (self.buff_count * self.looped)) % (self.size() + 1 or 1)
+        idx = self._it_sum.find_prefixsum_idx(mass)
         return idx
 
-    def tree_to_buff_idx(self, idx):
-        #print("tree2buff")
-        #print(idx, self.buff_count, self.looped)
-        idx = (idx - self.buff_count * self.looped)
-        idx = idx if idx >= 0 else self.size() + 1 + idx
-        return idx
-
-    def update_priorities(self, buff_idcs, priorities):
+    def update_priorities(self, idcs, priorities):
         """
         Update priorities of sampled transitions.
-
-        sets priority of transition at index idxes[i] in buffer
+        Sets priority of transition at index idxes[i] in buffer
         to priorities[i].
 
-        :param buff_idcs: ([int]) List of idxes of sampled transitions
+        :param idcs: ([int]) List of idxes of sampled transitions
         :param priorities: ([float]) List of updated priorities corresponding to transitions at the sampled idxes
-            denoted by variable `idxes`.
+            denoted by variable `idcs`.
         """
-        if torch.is_tensor(buff_idcs):
-            buff_idcs = buff_idcs.int().tolist()
+        if torch.is_tensor(idcs):
+            idcs = idcs.int().tolist()
         if torch.is_tensor(priorities):
             priorities = priorities.tolist()
-        tree_idcs = tuple(self.buff_to_tree_idx(idx) for idx in buff_idcs)
-
-        assert len(tree_idcs) == len(priorities)
-        for idx, priority in zip(tree_idcs, priorities):
+        assert len(idcs) == len(priorities)
+        for idx, priority in zip(idcs, priorities):
             if priority == 0:
                 priority += 0.001
             assert priority > 0, f"priority: {priority}"
@@ -152,9 +113,9 @@ class PER(RLBuffer):
 
     def update(self, train_frac, extra_info):
         """ PER weight update, PER beta update"""
-        buff_idcs = extra_info["idx"]
+        idcs = extra_info["idx"]
         tde = extra_info["tde"]
-        self.update_priorities(buff_idcs, tde)
+        self.update_priorities(idcs, tde)
         self.calc_and_save_max_weight()
         self.beta = self.beta_start + (1 - self.beta_start) * train_frac
 
@@ -181,22 +142,22 @@ class NStep(RLBuffer):
         """ For n-step add rewards of discounted next n steps to current reward"""
         n_step_reward = 0
         count = 0
+        step_idx = idx
         for count in range(self.n_step):
-            step_idx = idx + count
             step_reward = super().get_reward(step_idx)
+            step_idx = self.incr_idx(step_idx)
             n_step_reward += step_reward * self.gamma ** count
-            if self.dones[step_idx]:
+            if self.is_end(step_idx):
                 break
         self.n_step_used = count + 1
         return n_step_reward
 
     def get_next_state(self, idx, state):
-        count = 0
-        done_slice = self.dones[idx: idx + self.n_step]
-        for count, done in enumerate(done_slice):
-            if done:
+        n_step_idx = idx
+        for _ in range(self.n_step):
+            if self.is_end(n_step_idx):
                 break
-        n_step_idx = idx + count
+            n_step_idx = self.incr_idx(n_step_idx)
         return super().get_next_state(n_step_idx, state)
 
 
@@ -212,7 +173,7 @@ class CER(RLBuffer):
     def __getitem__(self, idx):
         # overwrite index to be the most recently added index of the buffer at the start of a new batch
         if self.new_batch:
-            idx = self.size() - 1
+            idx = self.decr_idx(self.decr_idx(self.head))
             self.new_batch = False
         return super().__getitem__(idx)
 

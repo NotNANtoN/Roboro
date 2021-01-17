@@ -1,18 +1,9 @@
 import random
-import itertools
-from collections import deque, defaultdict
+from collections import defaultdict
 
 import torch
 
 from roboro.utils import apply_to_state
-
-
-class SliceableDeque(deque):
-    def __getitem__(self, index):
-        if isinstance(index, slice):
-            return type(self)(itertools.islice(self, index.start,
-                                               index.stop, index.step))
-        return deque.__getitem__(self, index)
 
 
 class RLBuffer(torch.utils.data.IterableDataset):
@@ -22,15 +13,13 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.update_freq = update_freq
         self.gamma = gamma
         self.dtype = torch.float32  # can be overridden by trainer to be float16
+        self.head = 0  # the index to which will be written next
         # Storage fields
-        self.states = SliceableDeque(maxlen=max_size)
-        self.rewards = SliceableDeque(maxlen=max_size)
-        self.actions = SliceableDeque(maxlen=max_size)
-        self.dones = SliceableDeque(maxlen=max_size)
-        self.extra_info = defaultdict(SliceableDeque)
-        # TODO: change from SliceableDeque to simple list and keep track of current index (add incr and decr methods)
-        #  this removes the difference between tree_idx and buffer_idx in PER (this avoids bugs and make the programming
-        #  simpler)
+        self.states = []
+        self.rewards = []
+        self.actions = []
+        self.dones = []
+        self.extra_info = defaultdict(list)
 
         # Can bet set from the outside to determine the end of an epoch
         self.should_stop = False
@@ -46,10 +35,11 @@ class RLBuffer(torch.utils.data.IterableDataset):
             yield self[idx]
             if self.should_stop or count == self.update_freq:
                 return
-                #raise StopIteration
 
     def __getitem__(self, idx):
         """ Return a single transition """
+        if idx == self.decr_idx(self.head):
+            idx = self.decr_idx(idx)
         # Stack states by calling .to():
         state = self.move(self.states[idx])
         next_state, done = self.get_next_state(idx, state)
@@ -65,7 +55,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
         return len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
 
     def sample_idx(self):
-        return random.randint(0, self.size() - 1)  # subtract one because randint sampling includes the upper bound
+        idx = random.randint(0, self.size() - 1)  # subtract one because randint sampling includes the upper bound
+        return idx
 
     def add(self, state, action, reward, done, store_episodes=False):
         # Mark episodic boundaries:
@@ -75,10 +66,17 @@ class RLBuffer(torch.utils.data.IterableDataset):
         #    self.done_idcs.add(self.next_idx)
 
         # Store data:
-        self.states.append(state)
-        self.actions.append(action)
-        self.rewards.append(reward)
-        self.dones.append(done)
+        if len(self.states) == self.max_size:
+            self.states[self.head] = state
+            self.actions[self.head] = action
+            self.rewards[self.head] = reward
+            self.dones[self.head] = done
+        else:
+            self.states.append(state)
+            self.actions.append(action)
+            self.rewards.append(reward)
+            self.dones.append(done)
+        self.head = self.incr_idx(self.head)
 
     def get_reward(self, idx):
         """ Method that can be overridden by subclasses"""
@@ -90,10 +88,11 @@ class RLBuffer(torch.utils.data.IterableDataset):
         if is_end:
             return torch.zeros_like(state), is_end
         else:
-            return self.move(self.states[idx + 1]), is_end
+            next_state_idx = self.incr_idx(idx)
+            return self.move(self.states[next_state_idx]), is_end
 
     def is_end(self, idx):
-        return self.dones[idx] or idx == self.size()
+        return self.dones[idx] or idx == self.decr_idx(self.head)
 
     def update(self, train_frac, extra_info):
         """ PER weight update, PER beta update etc can happen here"""
@@ -102,6 +101,16 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def move(self, obs):
         # Stack LazyFrames frames and convert to correct type (for half precision compatibility):
         return apply_to_state(lambda x: x.to("cpu", self.dtype), obs)
+
+    def incr_idx(self, idx):
+        idx = (idx + 1) % self.max_size
+        return idx
+
+    def decr_idx(self, idx):
+        idx = (idx - 1)
+        if idx < 0:
+            idx = self.max_size - 1
+        return idx
 
     def add_field(self, name, val):
         self.extra_info[name].append(val)

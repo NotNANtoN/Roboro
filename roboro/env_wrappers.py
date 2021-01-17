@@ -100,7 +100,9 @@ class AtariObsWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(3, 80, 80), dtype=env.observation_space.dtype)
 
     def observation(self, obs):
+        # cut off score section
         obs = obs[35:195]
+        # simple subsampling
         obs = obs[::2, ::2]
         # kill object flickering:
         if self.last_obs is not None:
