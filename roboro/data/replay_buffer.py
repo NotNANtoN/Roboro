@@ -104,8 +104,6 @@ class RLBuffer(torch.utils.data.IterableDataset):
                 self.add_extra_field(key, buffer_idx, val)
 
     def add_extra_field(self, key, idx, val):
-        while len(self.extra_info[key]) < self.size() + 1:
-            self.extra_info[key].append(torch.tensor(0))
         self.extra_info[key][idx] = val
 
     def move(self, obs):
