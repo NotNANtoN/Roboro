@@ -58,8 +58,8 @@ class Agent(torch.nn.Module):
         obs_feature_shape = self.obs_feature_net.get_out_size()
         # Create policy networks:
         self.policy = create_policy(obs_feature_shape, self.act_shape, double_q=double_q, rem=rem, int_ens=int_ens,
-                                         use_qv=qv, use_qvmax=qvmax, iqn=iqn, use_soft_q=soft_q, use_munch_q=munch_q,
-                                         policy_kwargs=policy, )
+                                    use_qv=qv, use_qvmax=qvmax, iqn=iqn, use_soft_q=soft_q, use_munch_q=munch_q,
+                                    policy_kwargs=policy, )
         print("Policy: ", self.policy)
 
     def update_self(self, steps):

@@ -75,6 +75,8 @@ class Learner(pl.LightningModule):
         # init agent
         self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
                            warm_start_steps=warm_start_size, **agent_conf)
+        self.agent.log = self.log
+        self.agent.policy.log = self.log
         #print(self.agent)
 
         # init counters
