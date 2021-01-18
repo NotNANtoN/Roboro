@@ -110,6 +110,7 @@ class Q(Policy):
             next_obs_val = self.next_obs_val(next_obs)
         assert next_obs_val.shape == rewards.shape
         gammas = self._calc_gammas(done_flags)
+        assert gammas.shape == rewards.shape
 
         targets = rewards + gammas * next_obs_val
         return targets
@@ -142,13 +143,13 @@ class Q(Policy):
     def next_obs_act_select(self, next_obs, *args, use_target_net=True, **kwargs):
         # Next state action selection
         q_vals_next = self.q_pred_next_state(next_obs, *args, use_target_net=use_target_net, **kwargs)
-        max_idcs = torch.argmax(q_vals_next, dim=1, keepdim=True)
+        max_idcs = torch.argmax(q_vals_next, dim=-1, keepdim=True)
         return max_idcs, q_vals_next
 
     def next_obs_act_eval(self, max_idcs, next_obs, q_vals_next_eval=None, use_target_net=True):
         if q_vals_next_eval is None:
             q_vals_next_eval = self.q_pred_next_state(next_obs, use_target_net=use_target_net)
-        q_vals_next = q_vals_next_eval.gather(dim=1, index=max_idcs).squeeze()
+        q_vals_next = q_vals_next_eval.gather(dim=-1, index=max_idcs).squeeze()
         return q_vals_next
 
     @torch.no_grad()

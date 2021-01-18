@@ -100,6 +100,8 @@ class Agent(torch.nn.Module):
     def eval(self):
         self.stored_epsilon = self.epsilon
         self.epsilon = 0
+        super().eval()
 
     def train(self, mode: bool = True):
         self.epsilon = self.stored_epsilon if self.stored_epsilon is not None else self.epsilon
+        super().train(mode)
