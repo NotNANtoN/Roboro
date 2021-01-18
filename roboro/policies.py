@@ -86,7 +86,7 @@ class IQN(Q):
         actions = actions.unsqueeze(-1)
 
         # Calc target vals
-        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, extra_info,
+        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs,
                                        next_obs_val=next_obs_val)
         # Get expected Q values from local model
         q_expected, taus = self._get_obs_preds(obs, actions)

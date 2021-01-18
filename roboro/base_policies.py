@@ -67,7 +67,6 @@ class Q(Policy):
         # Create net lists to update target nets
         self.nets = [self.q_net]
         self.target_nets = [self.q_net_target]
-        self.loss_fnc = torch.nn.MSELoss(reduction='none')
 
     def get_net_args(self):
         args = [self.obs_size, self.act_size]
@@ -99,7 +98,6 @@ class Q(Policy):
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = (targets - preds)
         loss = calculate_huber_loss(tde)
-        # loss = self.loss_fnc(preds, targets)
         if "sample_weight" in extra_info:
             loss *= extra_info["sample_weight"]
         return loss.mean(), abs(tde)
@@ -134,9 +132,9 @@ class Q(Policy):
     def next_obs_val(self, next_obs, *args, **kwargs):
         """Calculate the value of the next obs via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
-        # Next state action selection
-        max_idcs, q_vals_next = self.next_obs_act_select(next_obs, *args, **kwargs)
-        # Next state action evaluation
+        # Select best action for next state
+        max_idcs, q_vals_next = self.next_obs_act_select(next_obs, *args, use_target_net=True, **kwargs)
+        # Evaluate selected action for next state (possibly using a different network)
         q_vals_next = self.next_obs_act_eval(max_idcs, next_obs, *args, q_vals_next_eval=q_vals_next, **kwargs)
         return q_vals_next
 
