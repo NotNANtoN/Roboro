@@ -5,10 +5,7 @@ import torch.nn.functional as F
 
 
 def create_dense_layer(in_size, out_size, noisy_linear=False, act_func=True):
-    if noisy_linear:
-        create_linear = lambda fan_in, fan_out: NoisyLinear(fan_in, fan_out)
-    else:
-        create_linear = lambda fan_in, fan_out: torch.nn.Linear(fan_in, fan_out)
+    create_linear = NoisyLinear if noisy_linear else torch.nn.Linear
     module_list = [create_linear(in_size, out_size)]
     if act_func:
         module_list.append(torch.nn.ReLU(True))

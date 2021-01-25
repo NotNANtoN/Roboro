@@ -96,7 +96,7 @@ class Q(Policy):
         preds = self._get_obs_preds(obs, actions)
         targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, next_obs_val=next_obs_val)
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
-        tde = (targets - preds)
+        tde = targets - preds
         loss = calculate_huber_loss(tde)
         if "sample_weight" in extra_info:
             loss *= extra_info["sample_weight"]

@@ -102,8 +102,7 @@ class IQN(Q):
             f'Wrong td error shape: {td_error.shape}. target: {targets.shape}. expected: {preds.shape}'
         huber_l = calculate_huber_loss(td_error, self.huber_thresh)
         quantil_l = (taus - (td_error.detach() < 0).float()).abs() * huber_l / self.huber_thresh
-        # loss = quantil_l.sum(dim=1).mean(dim=1, keepdim=True) * weights # FOR PER!
-        loss = quantil_l.sum(dim=1).mean(dim=1)  # , keepdim=True if per weights get multipl
+        loss = quantil_l.sum(dim=1).mean(dim=1)
         return loss, td_error.sum(dim=1).mean(dim=1)
 
     @torch.no_grad()
