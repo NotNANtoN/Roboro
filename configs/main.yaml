@@ -1,4 +1,5 @@
 defaults:
+  - _self_
   - env:
   - policy: q
   - hydra/launcher: basic  # joblib (parallel) or basic (serial)
@@ -10,14 +11,13 @@ env_steps: 10000
 
 trainer:
 #  weights_summary: "full"
-  gradient_clip_val: 0  # 0 means don't clip
-  terminate_on_nan: 0  # Needs to be 0 - otherwise this takes up a third of training time!
+  gradient_clip_val: 1.0  # 0 means don't clip
   precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
 
 opt:
   name: adam
   eps: 0.00001
-  lr: 0.00003
+  lr: 0.0003
 
 learner:
   train_env:
@@ -55,7 +55,9 @@ agent:
   rem: 0
   # learn alg params
   clip_rewards: 0
-  eps_start: 0.1
+  eps_start: 1.0
+  eps_end: 0.05
+  eps_decay_steps: 10000
   # feature extraction net params
   feat_layer_width: 256
   # target net params

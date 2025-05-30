@@ -1,4 +1,4 @@
-from typing import Tuple, List, Dict, Optional, Any
+from typing import Tuple, List, Dict, Optional, Any, Union
 
 import pytorch_lightning as pl
 import numpy as np
@@ -16,7 +16,7 @@ class Learner(pl.LightningModule):
     PyTorch Lightning Module that contains an Agent and trains it in an env
     
     Example:
-        >>> import gym
+        >>> import gymnasium as gym
         >>> from roboro.learner import Learner
         ...
         >>> learner = Learner(env="CartPole-v1")
@@ -105,7 +105,10 @@ class Learner(pl.LightningModule):
         self.lr = opt_conf.lr
         self.opt_eps = opt_conf.eps
 
-    def forward(self, obs: torch.Tensor) -> int:
+    def forward(self, obs: Union[torch.Tensor, Tuple]) -> int:
+        # If obs is a tuple, take the first element which should be the observation tensor
+        if isinstance(obs, tuple):
+            obs = obs[0]
         obs = obs.to(self.device, self.dtype).unsqueeze(0)
         action = self.agent(obs).item()
         return action
@@ -115,19 +118,19 @@ class Learner(pl.LightningModule):
         self.buffer.dtype = self.dtype  # give dtype to buffer for type compatibility in mixed precision
         if self.warm_start > 0:
             self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
-            self.train_obs = self.train_env.reset()
+            self.train_obs = self.train_env.reset()[0]
 
     def on_train_start(self):
         """ Do an evaluation round at the very start
         """
-        self.training_epoch_end([])
+        self.on_train_epoch_end()
 
     def on_train_epoch_start(self) -> None:
         """Reset counters"""
         self.buffer.should_stop = False
         self.epoch_steps = 0
 
-    def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
+    def on_train_batch_start(self, batch, batch_idx):
         """ Take some steps in th the env and store them in the replay buffer"""
         if self.train_env is None:
             return
@@ -140,7 +143,7 @@ class Learner(pl.LightningModule):
             self.epoch_steps += step_increase
             self.total_steps += step_increase
             if is_done:
-                self.train_obs = self.train_env.reset()
+                self.train_obs = self.train_env.reset()[0]
                 self.total_eps += 1
                 if self.epoch_steps > self.steps_per_epoch:
                     #  force buffer to return None in next it
@@ -168,7 +171,7 @@ class Learner(pl.LightningModule):
         self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
-    def training_epoch_end(self, outputs: List[Any]) -> None:
+    def on_train_epoch_end(self) -> None:
         """Evaluate the agent for n episodes"""
         if self.val_env is None:
             return
@@ -208,7 +211,8 @@ class Learner(pl.LightningModule):
     def step_agent(self, obs, env, store=False):
         with torch.no_grad():
             action = self(obs)
-        next_state, r, is_done, _ = env.step(action)
+        next_state, r, terminated, truncated, _ = env.step(action)
+        is_done = terminated or truncated
         # add to buffer
         if store:
             self.buffer.add(state=obs, action=action, reward=r, done=is_done)
@@ -232,7 +236,7 @@ class Learner(pl.LightningModule):
         total_rewards = []
         steps = 0
         eps = 0
-        episode_state = env.reset()
+        episode_state = env.reset()[0]
 
         while (not n_steps or steps < n_steps) and (not n_eps or eps < n_eps):
             is_done = False
@@ -242,7 +246,7 @@ class Learner(pl.LightningModule):
                 episode_state = next_state
                 episode_reward += r
                 steps += 1
-            episode_state = env.reset()
+            episode_state = env.reset()[0]
             total_rewards.append(episode_reward)
             eps += 1
             if render:

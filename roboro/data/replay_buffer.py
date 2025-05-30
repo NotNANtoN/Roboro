@@ -80,8 +80,8 @@ class RLBuffer(torch.utils.data.IterableDataset):
 
     def get_reward(self, idx):
         """ Method that can be overridden by subclasses"""
-        return float(self.rewards[idx])
-        #return torch.tensor(self.rewards[idx], dtype=torch.float)
+        # return float(self.rewards[idx])
+        return torch.tensor(self.rewards[idx], dtype=self.dtype)
 
     def get_next_state(self, idx, state):
         """ Method that can be overridden by subclasses"""

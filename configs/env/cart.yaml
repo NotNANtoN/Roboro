@@ -6,3 +6,12 @@ learner:
   frame_stack: 0
   frameskip: 0
   train_env: CartPole-v1
+
+
+agent:
+  policy:
+    gamma: 0.99
+    net:
+      dueling: 0
+      noisy_layers: 0
+      width: 64

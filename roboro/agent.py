@@ -1,7 +1,8 @@
 import random
+import math # Added for exponential decay if chosen
 
 import torch
-import gym
+import gymnasium as gym
 from omegaconf import DictConfig
 
 from roboro.policies import create_policy
@@ -29,7 +30,9 @@ class Agent(torch.nn.Module):
                  rem: bool = False,
 
                  clip_rewards: bool = False,
-                 eps_start: float = 0.1,
+                 eps_start: float = 1.0, # Updated default
+                 eps_end: float = 0.05,
+                 eps_decay_steps: int = 10000,
                  target_net_hard_steps: int = 1000,
                  target_net_polyak_val: float = 0.99,
                  target_net_use_polyak: bool = True,
@@ -39,8 +42,12 @@ class Agent(torch.nn.Module):
                  ):
         super().__init__()
         # Set hyperparams
-        self.epsilon = eps_start
-        self.stored_epsilon = self.epsilon
+        self.eps_start = eps_start
+        self.eps_end = eps_end
+        self.eps_decay_steps = eps_decay_steps
+        self.epsilon = self.eps_start  # Initialize epsilon
+        self.stored_epsilon = self.epsilon # For eval mode
+
         self.target_net_hard_steps = target_net_hard_steps
         self.target_net_polyak_val = target_net_polyak_val
         self.target_net_use_polyak = target_net_use_polyak
@@ -66,6 +73,12 @@ class Agent(torch.nn.Module):
         """
         Update epsilon, target nets etc
         """
+        # Epsilon decay (Linear)
+        if self.eps_decay_steps > 0:
+            fraction = min(1.0, float(steps) / self.eps_decay_steps)
+            self.epsilon = self.eps_start + fraction * (self.eps_end - self.eps_start)
+            self.epsilon = max(self.eps_end, self.epsilon) # Ensure it doesn't go below eps_end
+        
         if self.target_net_use_polyak:
             self.policy.update_target_nets_soft(self.target_net_polyak_val)
         elif steps % self.target_net_hard_steps == 0:
@@ -98,10 +111,16 @@ class Agent(torch.nn.Module):
         return loss, extra_info
 
     def eval(self):
-        self.stored_epsilon = self.epsilon
+        self.stored_epsilon = self.epsilon # Store current epsilon before setting to 0
         self.epsilon = 0
         super().eval()
 
     def train(self, mode: bool = True):
-        self.epsilon = self.stored_epsilon if self.stored_epsilon is not None else self.epsilon
-        super().train(mode)
+        super().train(mode) # It's good practice to call super().train() first
+        if mode: # If switching to train mode (or already in train mode and this is called)
+            # Restore epsilon. If stored_epsilon is None (e.g. first time train() is called),
+            # default to eps_start or ensure epsilon is appropriately set from its last training state.
+            self.epsilon = self.stored_epsilon if self.stored_epsilon is not None else self.eps_start
+        else: # If switching to eval mode (mode is False)
+            self.stored_epsilon = self.epsilon # Store current epsilon before setting to 0 for eval
+            self.epsilon = 0

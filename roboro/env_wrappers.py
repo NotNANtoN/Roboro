@@ -1,7 +1,7 @@
 import random
 from collections import deque
 
-import gym
+import gymnasium as gym
 import torch
 import numpy as np
 try:
@@ -129,12 +129,16 @@ class FrameSkip(gym.Wrapper):
 
     def step(self, action):
         total_reward = 0.0
+        terminated = False
+        truncated = False
+        info = {}
+        obs = None # Initialize obs
         for _ in range(self._skip):
-            obs, reward, done, info = self.env.step(action)
+            obs, reward, terminated, truncated, info = self.env.step(action)
             total_reward += reward
-            if done:
+            if terminated or truncated:
                 break
-        return obs, total_reward, done, info
+        return obs, total_reward, terminated, truncated, info
 
 
 class StickyActions(gym.Wrapper):
@@ -149,12 +153,13 @@ class StickyActions(gym.Wrapper):
         # repeat action with a small probability
         if self._last_action is not None and random.random() < self._prob:
             action = self._last_action
-        obs, total_reward, done, info = self.env.step(action)
-        return obs, total_reward, done, info
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._last_action = action # Store the action that was actually taken
+        return obs, reward, terminated, truncated, info
 
-    def reset(self):
+    def reset(self, **kwargs):
         self._last_action = None
-        return self.env.reset()
+        return self.env.reset(**kwargs) # Pass kwargs for Gymnasium compatibility
 
 
 class FrameStack(gym.Wrapper):
@@ -181,16 +186,16 @@ class FrameStack(gym.Wrapper):
         obs_space = gym.spaces.Box(low=0, high=1, shape=shp, dtype=obs_space.dtype)
         return obs_space
 
-    def reset(self):
-        ob = self.env.reset()
+    def reset(self, **kwargs):
+        ob, info = self.env.reset(**kwargs) # Gymnasium reset returns obs, info
         for _ in range(self.k):
             self.frames.append(ob)
-        return self._get_ob()
+        return self._get_ob(), info # Return obs, info
 
     def step(self, action):
-        ob, reward, done, info = self.env.step(action)
+        ob, reward, terminated, truncated, info = self.env.step(action)
         self.frames.append(ob)
-        return self._get_ob(), reward, done, info
+        return self._get_ob(), reward, terminated, truncated, info
 
     def _get_ob(self):
         assert len(self.frames) == self.k
@@ -224,7 +229,12 @@ class LazyFrames:
         return torch.cat(frames, dim=0)
 
     def to(self, *args, **kwargs):
-        return self.get_stacked_frames().to(*args, **kwargs)
+        stacked = self.get_stacked_frames()
+        if isinstance(args[0], torch.device) or isinstance(args[0], str):
+            return stacked.to(*args, **kwargs)
+        elif isinstance(args[0], torch.dtype):
+            return stacked.to(dtype=args[0], **kwargs)
+        return stacked.to(*args, **kwargs)
 
     def __array__(self, dtype=None):
         print("Access forbidden array")

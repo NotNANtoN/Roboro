@@ -2,10 +2,9 @@ import os
 import time
 
 import hydra
-import mlflow
 import torch
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
@@ -30,16 +29,17 @@ def filter_out_env_override(ovargs):
 
 def test_agent(agent, env, render=False):
     """Test agent using normal gym style outside of learner"""
-    obs = env.reset()
+    obs = env.reset()[0]  # gymnasium reset returns (obs, info)
     done = False
     total_return = 0
     while not done:
         action = agent(obs)
-        next_obs, reward, done, _ = env.step(action)
+        next_obs, reward, terminated, truncated, _ = env.step(action)
         obs = next_obs
         if render:
             env.render()
         total_return += reward
+        done = terminated or truncated
     env.close()
     return total_return
 
@@ -66,7 +66,7 @@ def main(conf: DictConfig):
         checkpoint_callback = ModelCheckpoint(
             monitor='val_ret',
             dirpath=f'checkpoints/{current_time}',
-            filename='{epoch:02d}-{val_return:.1f}',
+            filename='{epoch:02d}-{val_ret:.1f}',
             save_top_k=3,
             mode='max')
         # Set up mlflowlogger
@@ -95,17 +95,35 @@ def main(conf: DictConfig):
         max_batches = conf.env_steps / frameskip / learner_args.steps_per_batch
         print("Number of env steps to train on: ", conf.env_steps)
         print("Number of batches to train on: ",max_batches)
+        
+        # Determine the best accelerator
+        if torch.cuda.is_available():
+            accelerator = "cuda"
+            devices = 1
+        elif torch.backends.mps.is_available():
+            accelerator = "mps"
+            devices = 1
+        else:
+            accelerator = "cpu"
+            devices = "auto"
+            
         trainer = Trainer(max_steps=max_batches,
-                          gpus=1 if torch.cuda.is_available() else 0,
+                          accelerator=accelerator,
+                          devices=devices,
                           callbacks=[checkpoint_callback],
                           logger=mlf_logger,
                           deterministic=deterministic,
                           **trainer_args,
                           )
-        trainer.fit(learner)
+        trainer.fit(learner, datamodule=learner.datamodule)
         trainer.save_checkpoint("checkpoints/latest.ckpt")
     # Send explicitly to correct device:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     learner.to(device)
     # Get train env:
     env = learner.train_env

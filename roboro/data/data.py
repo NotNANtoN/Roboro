@@ -27,7 +27,10 @@ class RLDataModule(pl.LightningDataModule):
         self.val_env, self.val_dl = self.train_env, self.train_dl
         if val_env is not None:
             self.val_env = create_env(val_env, **env_kwargs)
-        self.val_obs = self.val_env.reset()
+        if self.val_env:
+            self.val_obs = self.val_env.reset()
+        else:
+            self.val_obs = None
         if val_ds is not None:
             pass
             #self.val_dl = create_dl(val_ds)
@@ -35,7 +38,10 @@ class RLDataModule(pl.LightningDataModule):
         self.test_env, self.test_dl = self.val_env, self.val_dl
         if test_env is not None:
             self.test_env = create_env(test_env, **env_kwargs)
-        self.test_obs = self.test_env.reset()
+        if self.test_env:
+            self.test_obs = self.test_env.reset()
+        else:
+            self.test_obs = None
 
         #if val_ds is not None:
         #    self.val_dl = create_dl(val_ds)
@@ -45,12 +51,21 @@ class RLDataModule(pl.LightningDataModule):
         return self._dataloader(self.buffer)
 
     def val_dataloader(self) -> DataLoader:
-        return self.val_dl
-        #return self.train_dataloader()
+        if self.val_dl is not None:
+            return self.val_dl
+        # If not using a specific validation dataset,
+        # default to using the main buffer for PL's validation loop / sanity check.
+        # Actual environment validation is in Learner's on_train_epoch_end.
+        return self._dataloader(self.buffer)
 
     def test_dataloader(self) -> DataLoader:
         """Get test loader"""
-        return self.test_dl
+        if self.test_dl is not None:
+            return self.test_dl
+        # If not using a specific test dataset,
+        # default to using the main buffer for PL's test loop / sanity check.
+        # Actual environment testing is in Learner's test_epoch_end.
+        return self._dataloader(self.buffer)
 
     def collate(self, batch):
         print(batch)

@@ -1,8 +1,11 @@
-gym[atari]
-torch >= 1.6.0
-pytorch_lightning >= 1.0.6
+gymnasium==1.1.1
+torch >= 2.1.0
+pytorch_lightning == 2.5.1.post0
 mlflow
 hydra-core
 omegaconf
 # for experimenting
 hydra-joblib-launcher
+
+# utils
+uv
