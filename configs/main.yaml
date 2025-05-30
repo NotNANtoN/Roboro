@@ -26,6 +26,8 @@ learner:
   frame_stack: 0
   frameskip: 0
   grayscale: 0
+  discretize_actions: false
+  num_bins_per_dim: 5
   # training params
   steps_per_batch: 1
   batch_size: 32

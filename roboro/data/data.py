@@ -8,6 +8,8 @@ from roboro.env_wrappers import create_env
 class RLDataModule(pl.LightningDataModule):
     def __init__(self, buffer, train_env=None, train_ds=None, val_env=None, val_ds=None, test_env=None, test_ds=None,
                  batch_size=16, num_workers=0,
+                 discretize_actions: bool = False,
+                 num_bins_per_dim: int = 5,
                  **env_kwargs):
         super().__init__()
         assert train_env is not None or train_ds is not None, "Can't fit agent without training data!"
@@ -17,7 +19,7 @@ class RLDataModule(pl.LightningDataModule):
 
         self.train_env, self.train_dl = None, None
         if train_env is not None:
-            self.train_env, self.train_obs = create_env(train_env, **env_kwargs)
+            self.train_env, self.train_obs = create_env(train_env, discretize_actions=discretize_actions, num_bins_per_dim=num_bins_per_dim, **env_kwargs)
             print(self.train_env)
         if train_ds is not None:
             #self.dev_dataset = create_dl(train_ds)
@@ -26,18 +28,16 @@ class RLDataModule(pl.LightningDataModule):
         # init val loader
         self.val_env, self.val_dl = self.train_env, self.train_dl
         if val_env is not None:
-            self.val_env = create_env(val_env, **env_kwargs)
+            self.val_env, self.val_obs = create_env(val_env, discretize_actions=discretize_actions, num_bins_per_dim=num_bins_per_dim, **env_kwargs)
         if self.val_env:
             self.val_obs = self.val_env.reset()
-        else:
-            self.val_obs = None
         if val_ds is not None:
             pass
             #self.val_dl = create_dl(val_ds)
         # init test_env
         self.test_env, self.test_dl = self.val_env, self.val_dl
         if test_env is not None:
-            self.test_env = create_env(test_env, **env_kwargs)
+            self.test_env, self.test_obs = create_env(test_env, discretize_actions=discretize_actions, num_bins_per_dim=num_bins_per_dim, **env_kwargs)
         if self.test_env:
             self.test_obs = self.test_env.reset()
         else:

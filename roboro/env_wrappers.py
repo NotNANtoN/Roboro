@@ -1,5 +1,6 @@
 import random
 from collections import deque
+import itertools # For ActionDiscretizerWrapper
 
 import gymnasium as gym
 import torch
@@ -23,11 +24,67 @@ atari_env_names = ['adventure', 'airraid', 'alien', 'amidar', 'assault', 'asteri
               'venture', 'videopinball', 'wizardofwor', 'yars_revenge', 'zaxxon']
 
 
-def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob, CustomWrapper=None):
+class ActionDiscretizerWrapper(gym.ActionWrapper):
+    def __init__(self, env, num_bins_per_dim):
+        super().__init__(env)
+        assert isinstance(env.action_space, gym.spaces.Box), "ActionDiscretizerWrapper only works with Box action spaces."
+        
+        self.num_bins_per_dim = num_bins_per_dim
+        self.original_action_space = env.action_space
+        self.action_dims = self.original_action_space.shape[0]
+
+        if self.action_dims == 0: # Scalar action space
+             self.action_dims = 1
+             self.low = np.array([self.original_action_space.low])
+             self.high = np.array([self.original_action_space.high])
+        else:
+            self.low = self.original_action_space.low
+            self.high = self.original_action_space.high
+
+        self.num_discrete_actions = self.num_bins_per_dim ** self.action_dims
+        self.action_space = gym.spaces.Discrete(self.num_discrete_actions)
+
+        # Create a map from discrete action index to continuous action values
+        self.discrete_to_continuous_map = []
+        
+        # Generate all combinations of bin choices for each dimension
+        # E.g., if action_dims=2, num_bins_per_dim=3
+        # choices_per_dim will be [[0,1,2], [0,1,2]]
+        choices_per_dim = [list(range(self.num_bins_per_dim)) for _ in range(self.action_dims)]
+        
+        # itertools.product will give [(0,0), (0,1), (0,2), (1,0), ..., (2,2)]
+        for choice_combination in itertools.product(*choices_per_dim):
+            continuous_action = np.zeros(self.action_dims, dtype=self.original_action_space.dtype)
+            for i in range(self.action_dims):
+                dim_low = self.low[i]
+                dim_high = self.high[i]
+                if self.num_bins_per_dim == 1:
+                    continuous_action[i] = (dim_low + dim_high) / 2.0
+                else:
+                    continuous_action[i] = dim_low + (choice_combination[i] / (self.num_bins_per_dim - 1)) * (dim_high - dim_low)
+            self.discrete_to_continuous_map.append(continuous_action)
+
+    def action(self, discrete_action):
+        if not (0 <= discrete_action < self.num_discrete_actions):
+            raise ValueError(f"Discrete action {discrete_action} is out of bounds for {self.num_discrete_actions} actions.")
+        continuous_action = self.discrete_to_continuous_map[discrete_action]
+        # Ensure it's squeezed if the original action space was scalar but we made it 1D
+        if self.original_action_space.shape == ():
+            return continuous_action[0]
+        return continuous_action
+
+
+def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob, 
+               discretize_actions=False, num_bins_per_dim=5, CustomWrapper=None):
     # Init env:
     env = gym.make(env_name)
 
-    # Apply Wrappers:
+    # Apply Action Discretizer if configured and applicable
+    if discretize_actions and isinstance(env.action_space, gym.spaces.Box):
+        print(f"Discretizing continuous action space for {env_name} with {num_bins_per_dim} bins per dimension.")
+        env = ActionDiscretizerWrapper(env, num_bins_per_dim)
+
+    # Apply other Wrappers:
     if CustomWrapper is not None:
         env = CustomWrapper(env)
     if any(atari_name in env_name.lower() for atari_name in atari_env_names):

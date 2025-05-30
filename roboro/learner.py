@@ -46,6 +46,8 @@ class Learner(pl.LightningModule):
                  frame_stack: int = 0,
                  frameskip: int = 2,
                  grayscale: int = 0,
+                 discretize_actions: bool = False,
+                 num_bins_per_dim: int = 5,
 
                  agent_conf: DictConfig = None,
                  opt_conf: DictConfig = None
@@ -66,6 +68,8 @@ class Learner(pl.LightningModule):
                                        frameskip=frameskip,
                                        sticky_action_prob=sticky_actions,
                                        grayscale=grayscale,
+                                       discretize_actions=discretize_actions,
+                                       num_bins_per_dim=num_bins_per_dim,
                                        batch_size=batch_size,
                                        num_workers=num_workers,
                                        )
