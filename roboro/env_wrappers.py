@@ -75,14 +75,15 @@ class ActionDiscretizerWrapper(gym.ActionWrapper):
 
 
 def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob, 
-               discretize_actions=False, num_bins_per_dim=5, CustomWrapper=None):
+               discretize_actions=False, num_bins_per_dim=5, CustomWrapper=None, render_mode: str = None):
     # Init env:
-    env = gym.make(env_name)
+    env = gym.make(env_name, render_mode=render_mode)
 
     # Apply Action Discretizer if configured and applicable
     if discretize_actions and isinstance(env.action_space, gym.spaces.Box):
         print(f"Discretizing continuous action space for {env_name} with {num_bins_per_dim} bins per dimension.")
         env = ActionDiscretizerWrapper(env, num_bins_per_dim)
+        print(f"Number of discrete actions: {env.num_discrete_actions}")
 
     # Apply other Wrappers:
     if CustomWrapper is not None:

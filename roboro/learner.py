@@ -48,6 +48,7 @@ class Learner(pl.LightningModule):
                  grayscale: int = 0,
                  discretize_actions: bool = False,
                  num_bins_per_dim: int = 5,
+                 render_mode: str = None,
 
                  agent_conf: DictConfig = None,
                  opt_conf: DictConfig = None
@@ -70,6 +71,7 @@ class Learner(pl.LightningModule):
                                        grayscale=grayscale,
                                        discretize_actions=discretize_actions,
                                        num_bins_per_dim=num_bins_per_dim,
+                                       render_mode=render_mode,
                                        batch_size=batch_size,
                                        num_workers=num_workers,
                                        )
@@ -171,7 +173,8 @@ class Learner(pl.LightningModule):
         self.buffer.update(self.total_steps / self.max_steps, extra_info)
         # log metrics
         self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
-        self.log('eps', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        self.log('episodes', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        self.log('epsilon', self.agent.epsilon, on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
@@ -250,11 +253,11 @@ class Learner(pl.LightningModule):
                 episode_state = next_state
                 episode_reward += r
                 steps += 1
+                if render:
+                    env.render()
             episode_state = env.reset()[0]
             total_rewards.append(episode_reward)
             eps += 1
-            if render:
-                env.render()
         self.agent.epsilon = agent_epsilon
 
         return total_rewards

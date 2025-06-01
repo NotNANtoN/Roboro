@@ -59,8 +59,9 @@ def main(conf: DictConfig):
         learner = Learner.load_from_checkpoint(conf.path)
     else:
         # create from scratch
+        render_mode = "human" if conf.render else None
         learner = Learner(steps=conf.env_steps, agent_conf=conf.agent, opt_conf=conf.opt,
-                          buffer_conf=conf.buffer, **learner_args)
+                          buffer_conf=conf.buffer, render_mode=render_mode, **learner_args)
         # Do the training!
         current_time = time.strftime('%d-%h_%H:%M:%S', time.gmtime())
         checkpoint_callback = ModelCheckpoint(

@@ -1,4 +1,4 @@
-gymnasium==1.1.1
+gymnasium[classic-control]==1.1.1
 torch >= 2.1.0
 pytorch_lightning == 2.5.1.post0
 mlflow
