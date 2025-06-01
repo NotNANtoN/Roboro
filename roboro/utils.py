@@ -9,7 +9,7 @@ def unsqueeze_to(x, target):
 
 
 def create_wrapper(baseclass, superclass, add_superclass=None):
-    name = f'{str(baseclass)} <{str(superclass)}>'
+    name = f"{str(baseclass)} <{str(superclass)}>"
     if add_superclass is None:
         add_superclass = type
     baseclass_vars = dict(vars(baseclass))
@@ -19,7 +19,9 @@ def create_wrapper(baseclass, superclass, add_superclass=None):
 
 def polyak_update(net, target_net, factor):
     for target_param, param in zip(target_net.parameters(), net.parameters()):
-        target_param.data.copy_(factor * target_param.data + param.data * (1.0 - factor))
+        target_param.data.copy_(
+            factor * target_param.data + param.data * (1.0 - factor)
+        )
 
 
 def copy_weights(source_net, target_net):
@@ -32,15 +34,16 @@ def freeze_params(module: torch.nn.Module):
 
 
 def calculate_huber_loss(td_errors, k=1.0):
-    """Calculate huber loss element-wisely depending on kappa k.
-    """
-    loss = torch.where(td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k))
+    """Calculate huber loss element-wisely depending on kappa k."""
+    loss = torch.where(
+        td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k)
+    )
     return loss
 
 
 def weight_init(layers):
     for layer in layers:
-        torch.nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
+        torch.nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")
 
 
 class Standardizer(torch.nn.Module):
@@ -66,7 +69,11 @@ class Standardizer(torch.nn.Module):
         else:
             new_mean = self.mean + (obs - self.mean) / self.n
             self.run_var = self.run_var + (obs - new_mean) * (obs - self.mean)
-            var = self.run_var / (self.n - 1) if self.n > 1 else torch.tensor(1).type_as(obs)
+            var = (
+                self.run_var / (self.n - 1)
+                if self.n > 1
+                else torch.tensor(1).type_as(obs)
+            )
             self.std = torch.sqrt(var)
             self.mean = new_mean
             # Some inputs features (e.g. pixels) might never change
@@ -104,7 +111,10 @@ def apply_rec_to_dict(func, tensor_dict):
     """Apply a function recursively to every non dict object in a nested dict"""
     zipped = zip(tensor_dict.keys(), tensor_dict.values())
     return {
-        key: apply_rec_to_dict(func, content) if isinstance(content, dict)
-        else func(content)
+        key: (
+            apply_rec_to_dict(func, content)
+            if isinstance(content, dict)
+            else func(content)
+        )
         for key, content in zipped
     }

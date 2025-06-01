@@ -2,23 +2,29 @@ import torch
 from omegaconf import DictConfig, open_dict
 
 from roboro.networks import MLP
-from roboro.utils import polyak_update, copy_weights, freeze_params, unsqueeze_to, calculate_huber_loss
+from roboro.utils import (
+    calculate_huber_loss,
+    copy_weights,
+    freeze_params,
+    polyak_update,
+    unsqueeze_to,
+)
 
 
 class Policy(torch.nn.Module):
     def __init__(self, gamma=None):
-        """ Policy superclass that deals with basic and repetitiv tasks such as updating the target networks or
-         calculating the gamma values.
+        """Policy superclass that deals with basic and repetitiv tasks such as updating the target networks or
+        calculating the gamma values.
 
-         Subclasses need to define self.nets and self.target_nets such that the target nets are updated properly.
-         """
+        Subclasses need to define self.nets and self.target_nets such that the target nets are updated properly.
+        """
         super().__init__()
         self.gamma = gamma
         self.nets = []
         self.target_nets = []
 
     def __str__(self):
-        return f'Policy_{self.gamma}'
+        return f"Policy_{self.gamma}"
 
     def _calc_gammas(self, done_flags):
         """Apply the discount factor. If a done flag is set we discount by 0."""
@@ -36,7 +42,9 @@ class Policy(torch.nn.Module):
     def forward(self, obs):
         raise NotImplementedError
 
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None):
+    def calc_loss(
+        self, obs, actions, rewards, done_flags, next_obs, extra_info, targets=None
+    ):
         raise NotImplementedError
 
 
@@ -83,7 +91,7 @@ class Q(Policy):
         return net
 
     def __str__(self):
-        return f'Q <{super().__str__()}>'
+        return f"Q <{super().__str__()}>"
 
     def forward(self, obs):
         return self.q_net(obs)
@@ -92,9 +100,13 @@ class Q(Policy):
     def forward_target(self, obs):
         return self.q_net_target(obs)
 
-    def calc_loss(self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None):
+    def calc_loss(
+        self, obs, actions, rewards, done_flags, next_obs, extra_info, next_obs_val=None
+    ):
         preds = self._get_obs_preds(obs, actions)
-        targets = self.calc_target_val(obs, actions, rewards, done_flags, next_obs, next_obs_val=next_obs_val)
+        targets = self.calc_target_val(
+            obs, actions, rewards, done_flags, next_obs, next_obs_val=next_obs_val
+        )
         assert targets.shape == preds.shape, f"{targets.shape}, {preds.shape}"
         tde = targets - preds
         loss = calculate_huber_loss(tde)
@@ -103,7 +115,9 @@ class Q(Policy):
         return loss.mean(), abs(tde)
 
     @torch.no_grad()
-    def calc_target_val(self, obs, actions, rewards, done_flags, next_obs, next_obs_val=None):
+    def calc_target_val(
+        self, obs, actions, rewards, done_flags, next_obs, next_obs_val=None
+    ):
         if next_obs_val is None:
             next_obs_val = self.next_obs_val(next_obs)
         assert next_obs_val.shape == rewards.shape
@@ -133,26 +147,36 @@ class Q(Policy):
         """Calculate the value of the next obs via the target network.
         If a done_flag is set the next obs val is 0, else calculate it"""
         # Select best action for next state
-        max_idcs, q_vals_next = self.next_obs_act_select(next_obs, *args, use_target_net=True, **kwargs)
+        max_idcs, q_vals_next = self.next_obs_act_select(
+            next_obs, *args, use_target_net=True, **kwargs
+        )
         # Evaluate selected action for next state (possibly using a different network)
-        q_vals_next = self.next_obs_act_eval(max_idcs, next_obs, *args, q_vals_next_eval=q_vals_next, **kwargs)
+        q_vals_next = self.next_obs_act_eval(
+            max_idcs, next_obs, *args, q_vals_next_eval=q_vals_next, **kwargs
+        )
         return q_vals_next
 
     def next_obs_act_select(self, next_obs, *args, use_target_net=True, **kwargs):
         # Next state action selection
-        q_vals_next = self.q_pred_next_state(next_obs, *args, use_target_net=use_target_net, **kwargs)
+        q_vals_next = self.q_pred_next_state(
+            next_obs, *args, use_target_net=use_target_net, **kwargs
+        )
         max_idcs = torch.argmax(q_vals_next, dim=-1, keepdim=True)
         return max_idcs, q_vals_next
 
-    def next_obs_act_eval(self, max_idcs, next_obs, q_vals_next_eval=None, use_target_net=True):
+    def next_obs_act_eval(
+        self, max_idcs, next_obs, q_vals_next_eval=None, use_target_net=True
+    ):
         if q_vals_next_eval is None:
-            q_vals_next_eval = self.q_pred_next_state(next_obs, use_target_net=use_target_net)
+            q_vals_next_eval = self.q_pred_next_state(
+                next_obs, use_target_net=use_target_net
+            )
         q_vals_next = q_vals_next_eval.gather(dim=-1, index=max_idcs).squeeze()
         return q_vals_next
 
     @torch.no_grad()
     def q_pred_next_state(self, next_obs, use_target_net=True, net=None):
-        """ Specified in extra method to be potentially overridden by subclasses"""
+        """Specified in extra method to be potentially overridden by subclasses"""
         if net is None:
             if use_target_net:
                 net = self.q_net_target
@@ -166,10 +190,10 @@ class V(Q):
     Only the _gather_preds function needs to be overwritten"""
 
     def __init__(self, obs_size, act_size, net: DictConfig = None, *args, **kwargs):
-        super(V, self).__init__(obs_size, act_size, *args, net=net, **kwargs)
+        super().__init__(obs_size, act_size, *args, net=net, **kwargs)
 
     def __str__(self):
-        return f'V <{super().__str__()}>'
+        return f"V <{super().__str__()}>"
 
     def _gather_obs(self, preds, actions):
         """Instead of gathering the prediction according to the actions, simply return the predictions"""
@@ -183,5 +207,5 @@ class V(Q):
     def get_net_kwargs(self):
         kwargs = super().get_net_kwargs()
         with open_dict(kwargs):
-            del kwargs['dueling']
+            del kwargs["dueling"]
         return kwargs

@@ -72,8 +72,8 @@ agent:
       dueling: 0
       noisy_layers: 0
       width: 256
-  
-  
+
+
 # To read the modified CLI args and set the MLflow run_name according to it:
 override_args: ${hydra:job.override_dirname}
 

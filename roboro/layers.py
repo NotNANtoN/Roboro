@@ -1,7 +1,6 @@
 import math
 
 import torch
-import torch.nn.functional as F
 
 
 def create_dense_layer(in_size, out_size, noisy_linear=False, act_func=True):
@@ -26,9 +25,13 @@ class DuelingLayer(torch.nn.Module):
             hidden_size: size of hidden layers
         """
         super().__init__()
-        self.head_adv = create_dense_layer(in_size, out_size, act_func=False, **linear_kwargs)
+        self.head_adv = create_dense_layer(
+            in_size, out_size, act_func=False, **linear_kwargs
+        )
         if v_head is None:
-            self.head_val = create_dense_layer(in_size, 1, act_func=False, **linear_kwargs)
+            self.head_val = create_dense_layer(
+                in_size, 1, act_func=False, **linear_kwargs
+            )
         else:
             self.head_val = v_head
 
@@ -53,7 +56,13 @@ class NoisyLinear(torch.nn.Linear):
     Chapter08/lib/dqn_extra.py#L19
     """
 
-    def __init__(self, in_features: int, out_features: int, sigma_init: float = 0.017, bias: bool = True):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        sigma_init: float = 0.017,
+        bias: bool = True,
+    ):
         """
         Args:
             in_features: number of inputs

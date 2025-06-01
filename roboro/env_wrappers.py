@@ -1,10 +1,11 @@
+import itertools  # For ActionDiscretizerWrapper
 import random
 from collections import deque
-import itertools # For ActionDiscretizerWrapper
 
 import gymnasium as gym
-import torch
 import numpy as np
+import torch
+
 try:
     import aigar
 except ModuleNotFoundError:
@@ -12,61 +13,125 @@ except ModuleNotFoundError:
 
 from roboro.utils import apply_rec_to_dict, apply_to_state_list
 
-
-atari_env_names = ['adventure', 'airraid', 'alien', 'amidar', 'assault', 'asterix', 'asteroids', 'atlantis',
-              'bank_heist', 'battlezone', 'beam_rider', 'berzerk', 'bowling', 'boxing', 'breakout', 'carnival',
-              'centipede', 'choppercommand', 'crazyclimber', 'defender', 'demonattack', 'doubledunk',
-              'elevatoraction', 'enduro', 'fishingderby', 'freeway', 'frostbite', 'gopher', 'gravitar',
-              'hero', 'icehockey', 'jamesbond', 'journey_escape', 'kangaroo', 'krull', 'kungfumaster',
-              'montezuma_revenge', 'ms_pacman', 'namethisgame', 'phoenix', 'pitfall', 'pong', 'pooyan',
-              'private_eye', 'qbert', 'riverraid', 'road_runner', 'robotank', 'seaquest', 'skiing',
-              'solaris', 'spaceinvaders', 'stargunner', 'tennis', 'timepilot', 'tutankham', 'upndown',
-              'venture', 'videopinball', 'wizardofwor', 'yars_revenge', 'zaxxon']
+atari_env_names = [
+    "adventure",
+    "airraid",
+    "alien",
+    "amidar",
+    "assault",
+    "asterix",
+    "asteroids",
+    "atlantis",
+    "bank_heist",
+    "battlezone",
+    "beam_rider",
+    "berzerk",
+    "bowling",
+    "boxing",
+    "breakout",
+    "carnival",
+    "centipede",
+    "choppercommand",
+    "crazyclimber",
+    "defender",
+    "demonattack",
+    "doubledunk",
+    "elevatoraction",
+    "enduro",
+    "fishingderby",
+    "freeway",
+    "frostbite",
+    "gopher",
+    "gravitar",
+    "hero",
+    "icehockey",
+    "jamesbond",
+    "journey_escape",
+    "kangaroo",
+    "krull",
+    "kungfumaster",
+    "montezuma_revenge",
+    "ms_pacman",
+    "namethisgame",
+    "phoenix",
+    "pitfall",
+    "pong",
+    "pooyan",
+    "private_eye",
+    "qbert",
+    "riverraid",
+    "road_runner",
+    "robotank",
+    "seaquest",
+    "skiing",
+    "solaris",
+    "spaceinvaders",
+    "stargunner",
+    "tennis",
+    "timepilot",
+    "tutankham",
+    "upndown",
+    "venture",
+    "videopinball",
+    "wizardofwor",
+    "yars_revenge",
+    "zaxxon",
+]
 
 
 class ActionDiscretizerWrapper(gym.ActionWrapper):
     def __init__(self, env, num_bins_per_dim):
         super().__init__(env)
-        assert isinstance(env.action_space, gym.spaces.Box), "ActionDiscretizerWrapper only works with Box action spaces."
-        
+        assert isinstance(
+            env.action_space, gym.spaces.Box
+        ), "ActionDiscretizerWrapper only works with Box action spaces."
+
         self.num_bins_per_dim = num_bins_per_dim
         self.original_action_space = env.action_space
         self.action_dims = self.original_action_space.shape[0]
 
-        if self.action_dims == 0: # Scalar action space
-             self.action_dims = 1
-             self.low = np.array([self.original_action_space.low])
-             self.high = np.array([self.original_action_space.high])
+        if self.action_dims == 0:  # Scalar action space
+            self.action_dims = 1
+            self.low = np.array([self.original_action_space.low])
+            self.high = np.array([self.original_action_space.high])
         else:
             self.low = self.original_action_space.low
             self.high = self.original_action_space.high
 
-        self.num_discrete_actions = self.num_bins_per_dim ** self.action_dims
+        self.num_discrete_actions = self.num_bins_per_dim**self.action_dims
         self.action_space = gym.spaces.Discrete(self.num_discrete_actions)
 
         # Create a map from discrete action index to continuous action values
         self.discrete_to_continuous_map = []
-        
+
         # Generate all combinations of bin choices for each dimension
         # E.g., if action_dims=2, num_bins_per_dim=3
         # choices_per_dim will be [[0,1,2], [0,1,2]]
-        choices_per_dim = [list(range(self.num_bins_per_dim)) for _ in range(self.action_dims)]
-        
+        choices_per_dim = [
+            list(range(self.num_bins_per_dim)) for _ in range(self.action_dims)
+        ]
+
         # itertools.product will give [(0,0), (0,1), (0,2), (1,0), ..., (2,2)]
         for choice_combination in itertools.product(*choices_per_dim):
-            continuous_action = np.zeros(self.action_dims, dtype=self.original_action_space.dtype)
+            continuous_action = np.zeros(
+                self.action_dims, dtype=self.original_action_space.dtype
+            )
             for i in range(self.action_dims):
                 dim_low = self.low[i]
                 dim_high = self.high[i]
                 if self.num_bins_per_dim == 1:
                     continuous_action[i] = (dim_low + dim_high) / 2.0
                 else:
-                    continuous_action[i] = dim_low + (choice_combination[i] / (self.num_bins_per_dim - 1)) * (dim_high - dim_low)
+                    continuous_action[i] = dim_low + (
+                        choice_combination[i] / (self.num_bins_per_dim - 1)
+                    ) * (dim_high - dim_low)
             self.discrete_to_continuous_map.append(continuous_action)
 
     def action(self, discrete_action):
         if not (0 <= discrete_action < self.num_discrete_actions):
-            raise ValueError(f"Discrete action {discrete_action} is out of bounds for {self.num_discrete_actions} actions.")
+            raise ValueError(
+                f"Discrete action {discrete_action} is out of bounds for {self.num_discrete_actions} actions."
+            )
         continuous_action = self.discrete_to_continuous_map[discrete_action]
         # Ensure it's squeezed if the original action space was scalar but we made it 1D
         if self.original_action_space.shape == ():
@@ -74,14 +139,25 @@ class ActionDiscretizerWrapper(gym.ActionWrapper):
         return continuous_action
 
 
-def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob, 
-               discretize_actions=False, num_bins_per_dim=5, CustomWrapper=None, render_mode: str = None):
+def create_env(
+    env_name,
+    frameskip,
+    frame_stack,
+    grayscale,
+    sticky_action_prob,
+    discretize_actions=False,
+    num_bins_per_dim=5,
+    CustomWrapper=None,
+    render_mode: str = None,
+):
     # Init env:
     env = gym.make(env_name, render_mode=render_mode)
 
     # Apply Action Discretizer if configured and applicable
     if discretize_actions and isinstance(env.action_space, gym.spaces.Box):
-        print(f"Discretizing continuous action space for {env_name} with {num_bins_per_dim} bins per dimension.")
+        print(
+            f"Discretizing continuous action space for {env_name} with {num_bins_per_dim} bins per dimension."
+        )
         env = ActionDiscretizerWrapper(env, num_bins_per_dim)
         print(f"Number of discrete actions: {env.num_discrete_actions}")
 
@@ -94,7 +170,9 @@ def create_env(env_name, frameskip, frame_stack, grayscale, sticky_action_prob,
         if len(env.observation_space.shape) == 3:
             env = ToGrayScale(env)
         else:
-            print("Warning: Attempted to apply Grayscale wrapper to env without RGB space! Wrapper skipped.")
+            print(
+                "Warning: Attempted to apply Grayscale wrapper to env without RGB space! Wrapper skipped."
+            )
     env = ToTensor(env)
     if frameskip > 1:
         env = FrameSkip(env, skip=frameskip)
@@ -114,7 +192,9 @@ class ToGrayScale(gym.ObservationWrapper):
 
         self.setup(env.observation_space)
         if isinstance(env.observation_space, dict):
-            new_space = apply_rec_to_dict(self.transform_obs_space, env.observation_space)
+            new_space = apply_rec_to_dict(
+                self.transform_obs_space, env.observation_space
+            )
             self.observation_space = dict(new_space)
         else:
             self.observation_space = self.transform_obs_space(self.observation_space)
@@ -151,11 +231,15 @@ class ToTensor(gym.ObservationWrapper):
 
 class AtariObsWrapper(gym.ObservationWrapper):
     """Cut out a 80x80 square, kill object flickering by taking the max of all pixels between two consecutive frames,
-    permute dimensions of tensor to have channels first and convert to int8 (byte) data type."""
+    permute dimensions of tensor to have channels first and convert to int8 (byte) data type.
+    """
+
     def __init__(self, env):
         super().__init__(env)
         self.last_obs = None
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(3, 80, 80), dtype=env.observation_space.dtype)
+        self.observation_space = gym.spaces.Box(
+            low=0, high=255, shape=(3, 80, 80), dtype=env.observation_space.dtype
+        )
 
     def observation(self, obs):
         # cut off score section
@@ -180,6 +264,7 @@ class FrameSkip(gym.Wrapper):
 
     Note that this wrapper does not "maximize" over the skipped frames.
     """
+
     def __init__(self, env, skip=4):
         super().__init__(env)
         assert skip > 0
@@ -190,7 +275,7 @@ class FrameSkip(gym.Wrapper):
         terminated = False
         truncated = False
         info = {}
-        obs = None # Initialize obs
+        obs = None  # Initialize obs
         for _ in range(self._skip):
             obs, reward, terminated, truncated, info = self.env.step(action)
             total_reward += reward
@@ -200,8 +285,8 @@ class FrameSkip(gym.Wrapper):
 
 
 class StickyActions(gym.Wrapper):
-    """With a small probability, this wrapper applies the current action twice to the env.
-    """
+    """With a small probability, this wrapper applies the current action twice to the env."""
+
     def __init__(self, env, prob=0.25):
         super().__init__(env)
         self._prob = prob
@@ -212,12 +297,12 @@ class StickyActions(gym.Wrapper):
         if self._last_action is not None and random.random() < self._prob:
             action = self._last_action
         obs, reward, terminated, truncated, info = self.env.step(action)
-        self._last_action = action # Store the action that was actually taken
+        self._last_action = action  # Store the action that was actually taken
         return obs, reward, terminated, truncated, info
 
     def reset(self, **kwargs):
         self._last_action = None
-        return self.env.reset(**kwargs) # Pass kwargs for Gymnasium compatibility
+        return self.env.reset(**kwargs)  # Pass kwargs for Gymnasium compatibility
 
 
 class FrameStack(gym.Wrapper):
@@ -233,7 +318,9 @@ class FrameStack(gym.Wrapper):
         self.frames = deque([], maxlen=k)
 
         if isinstance(env.observation_space, dict):
-            new_space = apply_rec_to_dict(self.transform_obs_space, env.observation_space)
+            new_space = apply_rec_to_dict(
+                self.transform_obs_space, env.observation_space
+            )
             self.observation_space = dict(new_space)
         else:
             self.observation_space = self.transform_obs_space(self.observation_space)
@@ -245,10 +332,10 @@ class FrameStack(gym.Wrapper):
         return obs_space
 
     def reset(self, **kwargs):
-        ob, info = self.env.reset(**kwargs) # Gymnasium reset returns obs, info
+        ob, info = self.env.reset(**kwargs)  # Gymnasium reset returns obs, info
         for _ in range(self.k):
             self.frames.append(ob)
-        return self._get_ob(), info # Return obs, info
+        return self._get_ob(), info  # Return obs, info
 
     def step(self, action):
         ob, reward, terminated, truncated, info = self.env.step(action)
@@ -273,8 +360,9 @@ class LazyFrames:
 
     def get_stacked_frames(self):
         import copy
+
         frames = copy.copy(self._frames)
-        #frames = self._frames
+        # frames = self._frames
         stacked = self._stack_frames(frames)
         return stacked
 

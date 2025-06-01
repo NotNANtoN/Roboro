@@ -3,24 +3,23 @@ import random
 import torch
 
 from roboro.data.replay_buffer import RLBuffer
-from roboro.data.segment_tree import SumSegmentTree, MinSegmentTree
+from roboro.data.segment_tree import MinSegmentTree, SumSegmentTree
 from roboro.utils import create_wrapper
 
 
 def create_buffer(gamma, buffer_size=100000, n_step=0, per=0, cer=0, **buffer_kwargs):
     # Create replay buffer
     buffer_args = [buffer_size]
-    #buffer_kwargs.update{'update_freq': update_freq}
+    # buffer_kwargs.update{'update_freq': update_freq}
     BufferClass = RLBuffer
     if per:
         BufferClass = create_wrapper(PER, BufferClass)
-        #buffer_kwargs.update({'beta_start': 0.4,
+        # buffer_kwargs.update({'beta_start': 0.4,
         #                      'alpha': 0.6})
     if n_step > 1:
         BufferClass = create_wrapper(NStep, BufferClass)
-        buffer_kwargs.update({'n_step': n_step,
-                              'gamma': gamma})
-        gamma = gamma ** n_step
+        buffer_kwargs.update({"n_step": n_step, "gamma": gamma})
+        gamma = gamma**n_step
     if cer:
         BufferClass = create_wrapper(CER, BufferClass)
     buffer = BufferClass(*buffer_args, **buffer_kwargs)
@@ -28,7 +27,15 @@ def create_buffer(gamma, buffer_size=100000, n_step=0, per=0, cer=0, **buffer_kw
 
 
 class PER(RLBuffer):
-    def __init__(self, *args, max_priority=1.0, running_avg=0.0, beta_start=0.4, alpha=0.6, **kwargs):
+    def __init__(
+        self,
+        *args,
+        max_priority=1.0,
+        running_avg=0.0,
+        beta_start=0.4,
+        alpha=0.6,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.alpha = alpha
         self.max_priority = max_priority
@@ -44,9 +51,9 @@ class PER(RLBuffer):
         self._it_min = MinSegmentTree(it_capacity)
         # caches tree sum during sampling of a batch
         self.tree_sum = None
-        
+
     def __str__(self):
-        return f'PER{self.alpha}_{self.beta_start}<{super().__str__()}>'
+        return f"PER{self.alpha}_{self.beta_start}<{super().__str__()}>"
 
     def __getitem__(self, idx):
         out = super().__getitem__(idx)
@@ -62,7 +69,7 @@ class PER(RLBuffer):
     def sample_idx(self):
         if self.tree_sum is None:
             self.calc_and_save_max_weight()
-        mass = random.random() * self.tree_sum  #self._it_sum.sum(0, self.size() + 1)
+        mass = random.random() * self.tree_sum  # self._it_sum.sum(0, self.size() + 1)
         idx = self._it_sum.find_prefixsum_idx(mass)
         return idx
 
@@ -89,7 +96,9 @@ class PER(RLBuffer):
             old_priority = 0
             if self.running_avg:
                 old_priority = self._it_sum[idx] * self.running_avg
-            new_priority = old_priority + (priority ** self.alpha) * (1 - self.running_avg)
+            new_priority = old_priority + (priority**self.alpha) * (
+                1 - self.running_avg
+            )
             self._it_sum[idx] = new_priority
             self._it_min[idx] = new_priority
             self.max_priority = max(self.max_priority, new_priority)
@@ -109,11 +118,11 @@ class PER(RLBuffer):
         return weight
 
     def _set_priority_of_new_exp(self, idx):
-        self._it_sum[idx] = self.max_priority ** self.alpha
-        self._it_min[idx] = self.max_priority ** self.alpha
+        self._it_sum[idx] = self.max_priority**self.alpha
+        self._it_min[idx] = self.max_priority**self.alpha
 
     def update(self, train_frac, extra_info):
-        """ PER weight update, PER beta update"""
+        """PER weight update, PER beta update"""
         idcs = extra_info["idx"]
         tde = extra_info["tde"]
         self.update_priorities(idcs, tde)
@@ -129,16 +138,16 @@ class NStep(RLBuffer):
         self.gamma = gamma
 
     def __str__(self):
-        return f'NStep{self.n_step}<{super().__str__()}>'
+        return f"NStep{self.n_step}<{super().__str__()}>"
 
     def get_reward(self, idx):
-        """ For n-step add rewards of discounted next n steps to current reward"""
+        """For n-step add rewards of discounted next n steps to current reward"""
         n_step_reward = 0
         step_idx = idx
         for count in range(self.n_step):
             step_reward = super().get_reward(step_idx)
             step_idx = self.incr_idx(step_idx)
-            n_step_reward += step_reward * self.gamma ** count
+            n_step_reward += step_reward * self.gamma**count
             if self.is_end(step_idx):
                 break
         return n_step_reward
@@ -159,7 +168,7 @@ class CER(RLBuffer):
         self.new_batch = True
 
     def __str__(self):
-        return f'CER<{super().__str__()}>'
+        return f"CER<{super().__str__()}>"
 
     def __getitem__(self, idx):
         # overwrite index to be the most recently added index of the buffer at the start of a new batch

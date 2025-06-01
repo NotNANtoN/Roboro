@@ -37,7 +37,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
                 return
 
     def __getitem__(self, idx):
-        """ Return a single transition """
+        """Return a single transition"""
         if idx == self.decr_idx(self.head):
             idx = self.decr_idx(idx)
         # Stack states by calling .to():
@@ -52,10 +52,14 @@ class RLBuffer(torch.utils.data.IterableDataset):
     def size(self):
         """Length method that does not override __len__, otherwise pytorch lightning would create a new epoch based on
         the buffer length"""
-        return len(self.states) - 1  # subtract one because last added state can't be sampled (no next state yet)
+        return (
+            len(self.states) - 1
+        )  # subtract one because last added state can't be sampled (no next state yet)
 
     def sample_idx(self):
-        idx = random.randint(0, self.size() - 1)  # subtract one because randint sampling includes the upper bound
+        idx = random.randint(
+            0, self.size() - 1
+        )  # subtract one because randint sampling includes the upper bound
         return idx
 
     def add(self, state, action, reward, done, store_episodes=False):
@@ -79,12 +83,12 @@ class RLBuffer(torch.utils.data.IterableDataset):
         self.head = self.incr_idx(self.head)
 
     def get_reward(self, idx):
-        """ Method that can be overridden by subclasses"""
+        """Method that can be overridden by subclasses"""
         # return float(self.rewards[idx])
         return torch.tensor(self.rewards[idx], dtype=self.dtype)
 
     def get_next_state(self, idx, state):
-        """ Method that can be overridden by subclasses"""
+        """Method that can be overridden by subclasses"""
         is_end = self.is_end(idx)
         if is_end:
             return torch.zeros_like(state), is_end
@@ -96,7 +100,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
         return self.dones[idx] or idx == self.decr_idx(self.head)
 
     def update(self, train_frac, extra_info):
-        """ PER weight update, PER beta update etc can happen here"""
+        """PER weight update, PER beta update etc can happen here"""
         return
         idcs = extra_info.pop("idx")
         del extra_info["tde"]
@@ -117,7 +121,7 @@ class RLBuffer(torch.utils.data.IterableDataset):
         return idx
 
     def decr_idx(self, idx):
-        idx = (idx - 1)
+        idx = idx - 1
         if idx < 0:
             idx = self.max_size - 1
         return idx

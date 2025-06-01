@@ -1,7 +1,7 @@
-import torch
 import numpy as np
+import torch
 
-from roboro.layers import create_dense_layer, DuelingLayer
+from roboro.layers import DuelingLayer, create_dense_layer
 
 
 class CNN(torch.nn.Module):
@@ -14,17 +14,19 @@ class CNN(torch.nn.Module):
         super().__init__()
         self.feat_size = feat_size
         in_channels = input_shape[0]
-        module_list = [torch.nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
-                       torch.nn.ReLU(True),
-                       torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
-                       torch.nn.ReLU(True),
-                       torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
-                       torch.nn.ReLU(True)
-                       ]
+        module_list = [
+            torch.nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            torch.nn.ReLU(True),
+        ]
         self.conv = torch.nn.Sequential(*module_list)
         conv_out_size = self.get_conv_out_size(input_shape)
-        self.head = torch.nn.Sequential(torch.nn.Linear(conv_out_size, feat_size),
-                                        torch.nn.ReLU(True))
+        self.head = torch.nn.Sequential(
+            torch.nn.Linear(conv_out_size, feat_size), torch.nn.ReLU(True)
+        )
 
     def get_conv_out_size(self, shape) -> int:
         """
@@ -47,7 +49,15 @@ class CNN(torch.nn.Module):
 
 
 class MLP(torch.nn.Module):
-    def __init__(self, in_size, out_size, dueling=False, noisy_layers=False, width=512, n_layers=2):
+    def __init__(
+        self,
+        in_size,
+        out_size,
+        dueling=False,
+        noisy_layers=False,
+        width=512,
+        n_layers=2,
+    ):
         super().__init__()
         self.out_size = out_size
         linear_kwargs = {"noisy_linear": noisy_layers}
@@ -55,13 +65,17 @@ class MLP(torch.nn.Module):
         if n_layers > 2:
             self.hidden_to_hidden = torch.nn.ModuleList([])
             while n_layers > 2:
-                self.hidden_to_hidden.append(create_dense_layer(width, width, **linear_kwargs))
+                self.hidden_to_hidden.append(
+                    create_dense_layer(width, width, **linear_kwargs)
+                )
         else:
             self.hidden_to_hidden = None
         if dueling:
             self.hidden_to_out = DuelingLayer(width, out_size, **linear_kwargs)
         else:
-            self.hidden_to_out = create_dense_layer(width, out_size, act_func=False, **linear_kwargs)
+            self.hidden_to_out = create_dense_layer(
+                width, out_size, act_func=False, **linear_kwargs
+            )
 
     def forward(self, state_features):
         hidden = self.in_to_hidden(state_features)
@@ -74,6 +88,7 @@ class MLP(torch.nn.Module):
 
 class IQNNet(torch.nn.Module):
     """IQN net. Adapted from https://github.com/BY571/IQN-and-Extensions"""
+
     def __init__(self, obs_size, act_size, num_tau, num_policy_samples, **net_kwargs):
         super().__init__()
         self.in_size = obs_size
@@ -84,8 +99,12 @@ class IQNNet(torch.nn.Module):
         self.n_cos = 64
 
         # Starting from 0 as in the paper
-        self.register_buffer("pis", torch.tensor([np.pi * i for i in range(1, self.n_cos + 1)],
-                                                 dtype=torch.float).view(1, 1, self.n_cos))
+        self.register_buffer(
+            "pis",
+            torch.tensor(
+                [np.pi * i for i in range(1, self.n_cos + 1)], dtype=torch.float
+            ).view(1, 1, self.n_cos),
+        )
         # Network Architecture
         # embedding layers
         width = net_kwargs["width"]
@@ -113,7 +132,9 @@ class IQNNet(torch.nn.Module):
         """
         if num_tau is None:
             num_tau = self.num_tau
-        taus = torch.rand(batch_size, num_tau, 1, dtype=self.pis.dtype, device=self.pis.device)
+        taus = torch.rand(
+            batch_size, num_tau, 1, dtype=self.pis.dtype, device=self.pis.device
+        )
         # shape is (batch_size, num_tau, 1)
         cos = torch.cos(taus * self.pis)
         assert cos.shape == (batch_size, num_tau, self.n_cos), "cos shape is incorrect"
@@ -132,12 +153,15 @@ class IQNNet(torch.nn.Module):
             num_tau = self.num_tau
         batch_size = obs.shape[0]
         if cos is None:
-            cos, taus = self.sample_cos(batch_size, num_tau)  # cos shape (batch, num_tau, layer_size)
+            cos, taus = self.sample_cos(
+                batch_size, num_tau
+            )  # cos shape (batch, num_tau, layer_size)
         cos = cos.view(batch_size * num_tau, self.n_cos)
 
         x = torch.relu(self.head(obs))
-        cos_x = torch.relu(self.cos_embedding(cos)).view(batch_size, num_tau,
-                                                         self.cos_layer_out)  # (batch, n_tau, layer)
+        cos_x = torch.relu(self.cos_embedding(cos)).view(
+            batch_size, num_tau, self.cos_layer_out
+        )  # (batch, n_tau, layer)
 
         # x has shape (batch, layer_size) for multiplication –> reshape to (batch, 1, layer)
         x = (x.unsqueeze(1) * cos_x).view(batch_size * num_tau, self.cos_layer_out)

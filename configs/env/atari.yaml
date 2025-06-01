@@ -8,6 +8,6 @@ learner:
   frameskip: 4
   grayscale: 1
   steps_per_batch: 0.25
-  
+
 agent:
   clip_rewards: 1

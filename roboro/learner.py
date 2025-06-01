@@ -1,11 +1,11 @@
-from typing import Tuple, List, Dict, Optional, Any, Union
+from typing import Any, List, Tuple, Union
 
-import pytorch_lightning as pl
 import numpy as np
+import pytorch_lightning as pl
 import torch
 import torch.optim as optim
-from torch.optim.optimizer import Optimizer
 from omegaconf import DictConfig, open_dict
+from torch.optim.optimizer import Optimizer
 
 from roboro.agent import Agent
 from roboro.data import RLDataModule, create_buffer
@@ -14,7 +14,7 @@ from roboro.data import RLDataModule, create_buffer
 class Learner(pl.LightningModule):
     """
     PyTorch Lightning Module that contains an Agent and trains it in an env
-    
+
     Example:
         >>> import gymnasium as gym
         >>> from roboro.learner import Learner
@@ -26,33 +26,31 @@ class Learner(pl.LightningModule):
     Note:
         Currently only supports CPU and single GPU training with `distributed_backend=dp`
     """
-    def __init__(self,
-                 steps: int = 100000,
-                 train_env: str = None,
-                 train_ds: str = None,
-                 val_env: str = None,
-                 val_ds: str = None,
-                 test_env: str = None,
-                 test_ds: str = None,
 
-                 batch_size: int = 32,
-                 num_workers: int = 0,
-
-                 buffer_conf: DictConfig = None,
-                 warm_start_size: int = 1000,
-                 steps_per_batch: int = 1,
-
-                 sticky_actions: float = 0.0,
-                 frame_stack: int = 0,
-                 frameskip: int = 2,
-                 grayscale: int = 0,
-                 discretize_actions: bool = False,
-                 num_bins_per_dim: int = 5,
-                 render_mode: str = None,
-
-                 agent_conf: DictConfig = None,
-                 opt_conf: DictConfig = None
-                 ):
+    def __init__(
+        self,
+        steps: int = 100000,
+        train_env: str = None,
+        train_ds: str = None,
+        val_env: str = None,
+        val_ds: str = None,
+        test_env: str = None,
+        test_ds: str = None,
+        batch_size: int = 32,
+        num_workers: int = 0,
+        buffer_conf: DictConfig = None,
+        warm_start_size: int = 1000,
+        steps_per_batch: int = 1,
+        sticky_actions: float = 0.0,
+        frame_stack: int = 0,
+        frameskip: int = 2,
+        grayscale: int = 0,
+        discretize_actions: bool = False,
+        num_bins_per_dim: int = 5,
+        render_mode: str = None,
+        agent_conf: DictConfig = None,
+        opt_conf: DictConfig = None,
+    ):
         super().__init__()
         self.save_hyperparameters()
         # Create replay buffer
@@ -61,29 +59,37 @@ class Learner(pl.LightningModule):
             agent_conf.policy.gamma = new_gamma
         print("Buffer: ", self.buffer)
         # Create envs and dataloaders
-        self.datamodule = RLDataModule(self.buffer,
-                                       train_env, train_ds,
-                                       val_env, val_ds,
-                                       test_env, test_ds,
-                                       frame_stack=frame_stack,
-                                       frameskip=frameskip,
-                                       sticky_action_prob=sticky_actions,
-                                       grayscale=grayscale,
-                                       discretize_actions=discretize_actions,
-                                       num_bins_per_dim=num_bins_per_dim,
-                                       render_mode=render_mode,
-                                       batch_size=batch_size,
-                                       num_workers=num_workers,
-                                       )
+        self.datamodule = RLDataModule(
+            self.buffer,
+            train_env,
+            train_ds,
+            val_env,
+            val_ds,
+            test_env,
+            test_ds,
+            frame_stack=frame_stack,
+            frameskip=frameskip,
+            sticky_action_prob=sticky_actions,
+            grayscale=grayscale,
+            discretize_actions=discretize_actions,
+            num_bins_per_dim=num_bins_per_dim,
+            render_mode=render_mode,
+            batch_size=batch_size,
+            num_workers=num_workers,
+        )
         self.train_env, self.train_obs = self.datamodule.get_train_env()
         self.val_env, self.val_obs = self.datamodule.get_val_env()
         self.test_env, self.test_obs = self.datamodule.get_test_env()
         # init agent
-        self.agent = Agent(self.train_env.observation_space, self.train_env.action_space,
-                           warm_start_steps=warm_start_size, **agent_conf)
+        self.agent = Agent(
+            self.train_env.observation_space,
+            self.train_env.action_space,
+            warm_start_steps=warm_start_size,
+            **agent_conf,
+        )
         self.agent.log = self.log
         self.agent.policy.log = self.log
-        #print(self.agent)
+        # print(self.agent)
 
         # init counters
         self.max_steps = steps
@@ -121,14 +127,17 @@ class Learner(pl.LightningModule):
 
     def on_fit_start(self):
         """Fill the replay buffer with explorative experiences"""
-        self.buffer.dtype = self.dtype  # give dtype to buffer for type compatibility in mixed precision
+        self.buffer.dtype = (
+            self.dtype
+        )  # give dtype to buffer for type compatibility in mixed precision
         if self.warm_start > 0:
-            self.run(n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0)
+            self.run(
+                n_steps=self.warm_start, env=self.train_env, store=True, epsilon=1.0
+            )
             self.train_obs = self.train_env.reset()[0]
 
     def on_train_start(self):
-        """ Do an evaluation round at the very start
-        """
+        """Do an evaluation round at the very start"""
         self.on_train_epoch_end()
 
     def on_train_epoch_start(self) -> None:
@@ -137,14 +146,16 @@ class Learner(pl.LightningModule):
         self.epoch_steps = 0
 
     def on_train_batch_start(self, batch, batch_idx):
-        """ Take some steps in th the env and store them in the replay buffer"""
+        """Take some steps in th the env and store them in the replay buffer"""
         if self.train_env is None:
             return
         self.train_step_count += self.steps_per_batch
         step_increase = 1 if self.frameskip <= 1 else self.frameskip
         while self.train_step_count > 1:
             self.train_step_count -= 1
-            next_state, action, r, is_done = self.step_agent(self.train_obs, self.train_env, store=True)
+            next_state, action, r, is_done = self.step_agent(
+                self.train_obs, self.train_env, store=True
+            )
             self.train_obs = next_state
             self.epoch_steps += step_increase
             self.total_steps += step_increase
@@ -172,10 +183,33 @@ class Learner(pl.LightningModule):
         # update buffer
         self.buffer.update(self.total_steps / self.max_steps, extra_info)
         # log metrics
-        self.log('steps', self.total_steps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
-        self.log('episodes', self.total_eps, on_step=True, on_epoch=False, prog_bar=True, logger=True)
-        self.log('epsilon', self.agent.epsilon, on_step=True, on_epoch=False, prog_bar=True, logger=True)
-        self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+        self.log(
+            "steps",
+            self.total_steps,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "episodes",
+            self.total_eps,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "epsilon",
+            self.agent.epsilon,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True
+        )
         return loss
 
     def on_train_epoch_end(self) -> None:
@@ -187,14 +221,37 @@ class Learner(pl.LightningModule):
         val_reward_lists = self.run(self.val_env, n_eps=n)
         assert n == len(val_reward_lists)
         avg_return = sum(val_reward_lists) / n
-        self.log('val_ret', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "val_ret",
+            avg_return,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
         self.n_evals += 1
-        self.mean_val_return = self.mean_val_return + (avg_return - self.mean_val_return) / self.n_evals
+        self.mean_val_return = (
+            self.mean_val_return + (avg_return - self.mean_val_return) / self.n_evals
+        )
 
-        self.log('mean', self.mean_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "mean",
+            self.mean_val_return,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
         if avg_return > self.max_val_return:
             self.max_val_return = avg_return
-        self.log('max', self.max_val_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "max",
+            self.max_val_return,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
 
     def validation_step(self, batch, *args, **kwargs):
         if batch is not None:
@@ -213,7 +270,14 @@ class Learner(pl.LightningModule):
         test_reward_lists = self.run(self.test_env, n_eps=n)
         assert n == len(test_reward_lists)
         avg_return = sum(test_reward_lists) / n
-        self.log('test_return', avg_return, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "test_return",
+            avg_return,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
 
     def step_agent(self, obs, env, store=False):
         with torch.no_grad():
@@ -225,7 +289,15 @@ class Learner(pl.LightningModule):
             self.buffer.add(state=obs, action=action, reward=r, done=is_done)
         return next_state, action, r, is_done
 
-    def run(self, env, n_steps=0, n_eps: int = 0, epsilon: float = None, store=False, render=False) -> List[int]:
+    def run(
+        self,
+        env,
+        n_steps=0,
+        n_eps: int = 0,
+        epsilon: float = None,
+        store=False,
+        render=False,
+    ) -> List[int]:
         """
         Carries out N episodes or N steps of the environment with the current agent
         Args:
@@ -249,7 +321,9 @@ class Learner(pl.LightningModule):
             is_done = False
             episode_reward = 0
             while not is_done:
-                next_state, action, r, is_done = self.step_agent(episode_state, env, store=store)
+                next_state, action, r, is_done = self.step_agent(
+                    episode_state, env, store=store
+                )
                 episode_state = next_state
                 episode_reward += r
                 steps += 1
@@ -264,7 +338,9 @@ class Learner(pl.LightningModule):
 
     def configure_optimizers(self) -> Optimizer:
         if self.opt_name == "adam":
-            optimizer = optim.Adam(self.agent.parameters(), lr=self.lr, eps=self.opt_eps)
+            optimizer = optim.Adam(
+                self.agent.parameters(), lr=self.lr, eps=self.opt_eps
+            )
         return optimizer
 
     def get_progress_bar_dict(self):
