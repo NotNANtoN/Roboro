@@ -52,10 +52,10 @@ class Standardizer(torch.nn.Module):
         apply z-standardization to observations"""
         super().__init__()
         self.record_steps = record_steps
-        self.register_buffer("mean", torch.tensor(0))
-        self.register_buffer("std", torch.tensor(1))
-        self.register_buffer("run_var", torch.tensor(0))
-        self.register_buffer("n", torch.tensor(0))
+        self.register_buffer("mean", torch.tensor(0.0, dtype=torch.float32))
+        self.register_buffer("std", torch.tensor(1.0, dtype=torch.float32))
+        self.register_buffer("run_var", torch.tensor(0.0, dtype=torch.float32))
+        self.register_buffer("n", torch.tensor(0, dtype=torch.int64))
 
     def observe(self, obs):
         # Check if we want to update the mean and std

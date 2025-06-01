@@ -49,6 +49,14 @@ See the [Trello board](https://trello.com/b/8Jaoco2O/roboro) for details.
 
 # TODOs
 
-- [ ] Precommit hooks (pyright, ruff, black, isort)
-- [ ] Test on next continuous env, did pendulum now maybe something like ant?
+- [ ] Debug HER buffer
+- [ ] Add monitoring of what the agent is doing. E.g. track what is the gradient towards inputs, are they actually used?
+- [ ] **Continuous Control Progression (toward Hugging Face S100 robot arm):**
+  - [ ] Test on FetchReach-v3 (7-DOF arm reaching - foundational manipulation)
+  - [ ] Test on FetchPush-v3 (object interaction - pushing tasks)
+  - [ ] Test on FetchSlide-v3 (dynamic object control - sliding on low friction)
+  - [ ] Test on FetchPickAndPlace-v3 (full manipulation pipeline)
+  - [ ] Implement multi-goal API support for goal-conditioned RL
+  - [ ] Test algorithm combinations (IQN+PER+CER+M-RL) on manipulation tasks
+  - [ ] Final target: Hugging Face S100/SO-101 robot arm integration
 - [ ] Add actor-critic algorithms (DDPG, SPG).

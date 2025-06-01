@@ -11,6 +11,15 @@ try:
 except ModuleNotFoundError:
     print("Aigar envs could not be loaded")
 
+# Register gymnasium-robotics environments
+try:
+    import gymnasium_robotics
+
+    gym.register_envs(gymnasium_robotics)
+    print("Gymnasium-robotics environments registered successfully")
+except ModuleNotFoundError:
+    print("Gymnasium-robotics could not be loaded - Fetch environments unavailable")
+
 from roboro.utils import apply_rec_to_dict, apply_to_state_list
 
 atari_env_names = [
@@ -152,6 +161,12 @@ def create_env(
 ):
     # Init env:
     env = gym.make(env_name, render_mode=render_mode)
+
+    # Handle dictionary observations from multi-goal environments (like FetchReach)
+    if hasattr(env.observation_space, "spaces") or isinstance(
+        env.observation_space, gym.spaces.Dict
+    ):
+        env = DictObsWrapper(env)
 
     # Apply Action Discretizer if configured and applicable
     if discretize_actions and isinstance(env.action_space, gym.spaces.Box):
@@ -405,3 +420,49 @@ class LazyFrames:
     def frame(self, i):
         print("Access forbidden frame")
         return self.get_stacked_frames()[..., i]
+
+
+class DictObsWrapper(gym.ObservationWrapper):
+    """Wrapper to handle dictionary observations from multi-goal environments.
+
+    Flattens dictionary observations into a single vector by concatenating:
+    - observation: robot state
+    - achieved_goal: current end-effector position
+    - desired_goal: target position
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+
+        # Get sample observation to determine structure
+        sample_obs = env.observation_space.sample()
+        if isinstance(sample_obs, dict):
+            self.is_dict_obs = True
+            self.dict_keys = list(sample_obs.keys())
+
+            # Calculate total flattened size
+            total_size = 0
+            for key in self.dict_keys:
+                total_size += np.prod(sample_obs[key].shape)
+
+            # Create new flat Box observation space
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf, high=np.inf, shape=(total_size,), dtype=np.float32
+            )
+            print(
+                f"DictObsWrapper: Flattening dict obs {sample_obs.keys()} to shape {self.observation_space.shape}"
+            )
+        else:
+            self.is_dict_obs = False
+            print("DictObsWrapper: Non-dict observation, wrapper has no effect")
+
+    def observation(self, obs):
+        if not self.is_dict_obs:
+            return obs
+
+        # Flatten dictionary observation
+        flat_obs = []
+        for key in self.dict_keys:
+            flat_obs.append(obs[key].flatten())
+
+        return np.concatenate(flat_obs, dtype=np.float32)
