@@ -366,6 +366,31 @@ class VideoRecordingWrapper(gym.Wrapper):
         self.frames = []
 
 
+class TensorToNumpyActionWrapper(gym.ActionWrapper):
+    """Converts torch tensor actions to numpy arrays or scalars as expected by the base environment."""
+
+    def __init__(self, env):
+        super().__init__(env)
+
+    def action(self, action):
+        # If action is a torch tensor, convert it to numpy
+        if hasattr(action, "detach"):  # Check if it's a tensor
+            action = action.detach().cpu().numpy()
+
+            # If it's a scalar action space, extract the scalar value
+            if isinstance(self.action_space, gym.spaces.Discrete):
+                action = int(action.item()) if hasattr(action, "item") else int(action)
+            elif (
+                isinstance(self.action_space, gym.spaces.Box)
+                and self.action_space.shape == ()
+            ):
+                action = (
+                    float(action.item()) if hasattr(action, "item") else float(action)
+                )
+
+        return action
+
+
 def create_env(
     env_name,
     frameskip,
@@ -417,6 +442,10 @@ def create_env(
         env = FrameStack(env, frame_stack)
     if sticky_action_prob > 0:
         env = StickyActions(env, sticky_action_prob)
+
+    # Add tensor to numpy action conversion wrapper - this should be near the end
+    # but before video recording to ensure actions are properly converted
+    env = TensorToNumpyActionWrapper(env)
 
     # Add video recording wrapper
     env = VideoRecordingWrapper(

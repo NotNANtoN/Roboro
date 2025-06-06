@@ -408,13 +408,12 @@ class Learner(pl.LightningModule):
         return items
 
     def on_before_optimizer_step(self, optimizer):
-        """Track gradient norms every 100 steps using Lightning's grad_norm utility."""
-        print("on_before_optimizer_step. train_step_count: ", self.train_step_count)
-        if self.train_step_count % 100 == 0:  # Only log every 100 steps
-            print("DOING GRAD NORM")
+        """Track gradient norms every 100 optimizer steps using Lightning's grad_norm utility."""
+        # Use trainer.global_step which tracks optimizer steps, not environment steps
+        if self.trainer.global_step > 0 and self.trainer.global_step % 100 == 0:
             # Compute the 2-norm for each layer
             # If using mixed precision, the gradients are already unscaled here
             norms = grad_norm(
                 self.agent, norm_type=2
             )  # Track norms for the agent's layers
-            self.log_dict(norms)
+            self.log_dict(norms, on_step=True, on_epoch=False, logger=True)
