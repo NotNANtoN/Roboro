@@ -2,10 +2,11 @@ gymnasium[classic-control]==1.1.1
 gymnasium-robotics
 torch >= 2.1.0
 pytorch_lightning == 2.5.1.post0
-mlflow
+wandb
 hydra-core
 omegaconf
 # for experimenting
 hydra-joblib-launcher
 # utils
 uv
+moviepy==2.2.1

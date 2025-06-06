@@ -1,4 +1,8 @@
+
+
 # folders
+videos/
+wandb_logs/
 checkpoints/
 ml-runs/
 mlruns/

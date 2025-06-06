@@ -1,4 +1,5 @@
 import itertools  # For ActionDiscretizerWrapper
+import os
 import random
 from collections import deque
 
@@ -148,6 +149,223 @@ class ActionDiscretizerWrapper(gym.ActionWrapper):
         return continuous_action
 
 
+class VideoRecordingWrapper(gym.Wrapper):
+    """Records videos of episodes in webm format and saves them to Weights & Biases."""
+
+    def __init__(
+        self,
+        env,
+        video_folder="videos",
+        record_freq=0.05,
+        video_length=30 * 10,
+        fps=30,
+        total_training_steps: int | None = None,
+        warm_start_steps: int | None = None,
+    ):
+        """
+        Args:
+            env: The environment to wrap
+            video_folder: Folder to store videos in
+            record_freq: Frequency of recording (0.05 means record every 5% of total training steps)
+            video_length: Maximum length of video in frames
+            fps: Frames per second for the output video
+            total_training_steps: Total number of training steps, used for percentage-based recording
+            warm_start_steps: Number of initial warm-up steps to skip before starting to record
+        """
+        super().__init__(env)
+        self.video_folder = video_folder
+        self.record_freq = record_freq
+        self.video_length = video_length
+        self.fps = fps
+        self.recording = False
+        self.frames = []
+        self.episode_reward = 0.0  # Track total reward for recorded episode
+        self.total_steps = 0  # Track total steps taken
+        self.last_recording_step = 0  # Track when we last recorded
+        self.total_training_steps = total_training_steps
+        self.warm_start_steps = warm_start_steps or 0  # Default to 0 if not provided
+        self.num_milestones_passed = 0
+        self.milestone_interval_steps = 0
+
+        if (
+            self.total_training_steps is not None
+            and self.total_training_steps > 0
+            and self.record_freq > 0
+        ):
+            # Adjust total_training_steps to account for warm-up phase
+            effective_training_steps = self.total_training_steps - self.warm_start_steps
+            self.milestone_interval_steps = int(
+                self.record_freq * effective_training_steps
+            )
+            if self.milestone_interval_steps == 0 and effective_training_steps > 0:
+                self.milestone_interval_steps = 1
+
+        # Create video directory if it doesn't exist
+        os.makedirs(video_folder, exist_ok=True)
+
+        # Import moviepy for video creation
+        self.ImageSequenceClip = None
+        self.image_sequence_clip_imported_successfully = False
+        try:
+            from moviepy import ImageSequenceClip
+
+            self.ImageSequenceClip = ImageSequenceClip
+            self.image_sequence_clip_imported_successfully = True
+        except ImportError:
+            print(
+                "Warning: moviepy.ImageSequenceClip not found. Please install moviepy (e.g., 'pip install moviepy') for video recording."
+            )
+
+    def should_record_episode(self):
+        """Determine if we should record this episode based on frequency."""
+        # Never record during warm-up phase
+        if self.total_steps < self.warm_start_steps:
+            return False
+
+        if self.total_training_steps is not None and self.milestone_interval_steps > 0:
+            # Percentage-based recording using steps (after warm-up)
+            if self.num_milestones_passed * self.milestone_interval_steps >= (
+                self.total_training_steps - self.warm_start_steps
+            ):
+                return False
+            current_milestone_target = (
+                self.warm_start_steps
+                + (self.num_milestones_passed + 1) * self.milestone_interval_steps
+            )
+            return self.total_steps >= current_milestone_target
+        else:
+            # Fallback to recording every N steps if total_training_steps not provided (still after warm-up)
+            if self.record_freq <= 0:
+                return False
+            steps_since_last = self.total_steps - max(
+                self.last_recording_step, self.warm_start_steps
+            )
+            steps_needed = int(1.0 / self.record_freq)
+            return steps_since_last >= steps_needed
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self.total_steps += 1  # Increment step counter
+
+        # Track episode reward if we're recording
+        if self.recording:
+            self.episode_reward += reward
+
+        if self.recording and self.image_sequence_clip_imported_successfully:
+            try:
+                # Get RGB frame from environment
+                frame = self.env.render()
+                if frame is not None:
+                    self.frames.append(frame)
+
+                # Stop recording if episode ends or max length reached
+                if terminated or truncated or len(self.frames) >= self.video_length:
+                    self._save_video()
+                    self.recording = False
+                    self.frames = []  # Clear frames to free memory
+            except Exception as e:
+                print(f"Warning: Failed to record frame: {e}")
+                self.recording = False
+                self.frames = []
+
+        # Check if we should start recording at the next step
+        # This ensures we capture full episodes when we hit milestones
+        if not self.recording and self.should_record_episode():
+            self.recording = True
+            self.episode_reward = 0.0  # Reset episode reward for new recording
+            if (
+                self.total_training_steps is not None
+                and self.milestone_interval_steps > 0
+            ):
+                self.num_milestones_passed += 1
+            else:
+                self.last_recording_step = self.total_steps
+            self.frames = []
+            # Get initial frame for this step
+            try:
+                frame = self.env.render()
+                if frame is not None:
+                    self.frames.append(frame)
+            except Exception as e:
+                print(f"Warning: Failed to record initial frame: {e}")
+                self.recording = False
+
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+
+        # Reset episode reward when starting a new episode
+        if self.recording:
+            self.episode_reward = 0.0
+
+        # If we're recording, get the initial frame
+        if self.recording and self.image_sequence_clip_imported_successfully:
+            try:
+                frame = self.env.render()
+                if frame is not None:
+                    self.frames.append(frame)
+            except Exception as e:
+                print(f"Warning: Failed to record initial frame: {e}")
+                self.recording = False
+
+        return obs, info
+
+    def _save_video(self):
+        """Save the recorded frames as a webm video."""
+        if not self.frames or not self.image_sequence_clip_imported_successfully:
+            return
+
+        try:
+            # Convert frames to clip
+            clip = self.ImageSequenceClip(self.frames, fps=self.fps)
+
+            # Save as webm with quality settings for good compression
+            video_path = os.path.join(
+                self.video_folder, f"episode_{self.total_steps}.webm"
+            )
+            clip.write_videofile(
+                video_path,
+                codec="libvpx",
+                audio=False,
+                ffmpeg_params=[
+                    "-crf",
+                    "23",
+                    "-b:v",
+                    "0",
+                ],  # Better quality/size balance
+            )
+
+            # Log to Weights & Biases
+            try:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log(
+                        {
+                            "videos/episode_video": wandb.Video(
+                                video_path, fps=self.fps, format="webm"
+                            ),
+                            "videos/episode_length": len(self.frames),
+                            "videos/episode_step": self.total_steps,
+                            "videos/episode_reward": self.episode_reward,
+                        }
+                    )
+            except ImportError:
+                print("Warning: wandb not found. Videos will only be saved locally.")
+            except Exception as e:
+                print(f"Warning: Failed to log video to wandb: {e}")
+
+            # Close clip to free memory
+            clip.close()
+
+        except Exception as e:
+            print(f"Warning: Failed to save video: {e}")
+
+        # Clear frames to free memory regardless of success/failure
+        self.frames = []
+
+
 def create_env(
     env_name,
     frameskip,
@@ -156,11 +374,15 @@ def create_env(
     sticky_action_prob,
     discretize_actions=False,
     num_bins_per_dim=5,
-    CustomWrapper=None,
-    render_mode: str = None,
+    CustomWrapper=None,  # noqa: N803
+    render_mode: str | None = None,
+    total_training_steps: int | None = None,
+    warm_start_steps: int | None = None,
 ):
     # Init env:
-    env = gym.make(env_name, render_mode=render_mode)
+    env = gym.make(
+        env_name, render_mode="rgb_array"
+    )  # Always use rgb_array for video recording
 
     # Handle dictionary observations from multi-goal environments (like FetchReach)
     if hasattr(env.observation_space, "spaces") or isinstance(
@@ -195,6 +417,14 @@ def create_env(
         env = FrameStack(env, frame_stack)
     if sticky_action_prob > 0:
         env = StickyActions(env, sticky_action_prob)
+
+    # Add video recording wrapper
+    env = VideoRecordingWrapper(
+        env,
+        total_training_steps=total_training_steps,
+        warm_start_steps=warm_start_steps,
+    )
+
     obs = env.reset()
     return env, obs
 

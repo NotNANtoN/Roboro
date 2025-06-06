@@ -2,7 +2,7 @@
 
 **Roboro**: to strengthen, reinforce
 
-The aim of this library is to implement modular deep reinforcement learning algorithms (RL). It is based on essential libraries such as [pytorch-lightning](https://github.com/PyTorchLightning/pytorch-lightning) for training organization, [hydra](https://hydra.cc/) for command line input and configuartions, and [mlflow](https://github.com/mlflow/mlflow) for experiment logging.
+The aim of this library is to implement modular deep reinforcement learning algorithms (RL). It is based on essential libraries such as [pytorch-lightning](https://github.com/PyTorchLightning/pytorch-lightning) for training organization, [hydra](https://hydra.cc/) for command line input and configuartions, and [Weights & Biases](https://wandb.ai/) for experiment logging.
 
 The modularity of this library is supposed to provide a taxonomy over algorithms and their extensions. Furthermore, orthogonal improvements to e.g. DQN can be combined on the fly, while keeping their implementations enclosed in classes.
 

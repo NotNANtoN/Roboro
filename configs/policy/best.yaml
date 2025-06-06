@@ -1,0 +1,43 @@
+# @package _global_
+
+
+path:
+seed:
+render: 0
+env_steps: 10000
+
+trainer:
+#  weights_summary: "full"
+  gradient_clip_val: 1.0  # 0 means don't clip
+  precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
+
+opt:
+  name: adam
+  eps: 0.00001
+  lr: 0.0003
+
+learner:
+  train_env:
+  # env wrappers params
+  # training params
+  steps_per_batch: 1
+  batch_size: 128
+  num_workers: 0
+
+buffer:
+  # buffer params
+  update_freq: 0
+  buffer_size: 1000000
+  n_step: 0
+  cer: 1
+  per: 0
+
+agent:
+  # policy selection
+  policy:
+    gamma: 0.99
+    net:
+      width: 256
+      activation_fn: "mish"  # from td-mpc2
+      use_layer_norm: 1  # from td-mpc2
+      dropout_rate: 0.01  # 1% dropout after first linear layer from td-mpc2

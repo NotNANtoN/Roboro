@@ -1,31 +1,34 @@
 import numpy as np
 import torch
 
-from roboro.layers import DuelingLayer, create_dense_layer
+from roboro.layers import DuelingLayer, create_dense_layer, get_activation
 
 
 class CNN(torch.nn.Module):
-    def __init__(self, input_shape, feat_size):
+    def __init__(self, input_shape, feat_size, activation_fn="relu"):
         """
         Args:
             input_shape: observation shape of the environment
             feat_size: size of the feature head layer at the end
+            activation_fn: activation function to use ("relu" or "mish")
         """
         super().__init__()
         self.feat_size = feat_size
         in_channels = input_shape[0]
+        activation = get_activation(activation_fn)
+
         module_list = [
             torch.nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
-            torch.nn.ReLU(True),
+            activation,
             torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            torch.nn.ReLU(True),
+            activation,
             torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            torch.nn.ReLU(True),
+            activation,
         ]
         self.conv = torch.nn.Sequential(*module_list)
         conv_out_size = self.get_conv_out_size(input_shape)
         self.head = torch.nn.Sequential(
-            torch.nn.Linear(conv_out_size, feat_size), torch.nn.ReLU(True)
+            torch.nn.Linear(conv_out_size, feat_size), activation
         )
 
     def get_conv_out_size(self, shape) -> int:
@@ -57,25 +60,40 @@ class MLP(torch.nn.Module):
         noisy_layers=False,
         width=512,
         n_layers=2,
+        activation_fn="relu",
+        use_layer_norm=False,
+        dropout_rate=None,
     ):
         super().__init__()
         self.out_size = out_size
-        linear_kwargs = {"noisy_linear": noisy_layers}
-        self.in_to_hidden = create_dense_layer(in_size, width, **linear_kwargs)
+        # First layer gets dropout, others don't
+        first_layer_kwargs = {
+            "noisy_linear": noisy_layers,
+            "use_layer_norm": use_layer_norm,
+            "act_func": activation_fn,
+            "dropout_rate": dropout_rate,  # Only first layer gets dropout
+        }
+        hidden_layer_kwargs = {
+            "noisy_linear": noisy_layers,
+            "use_layer_norm": use_layer_norm,
+            "act_func": activation_fn,
+        }
+
+        self.in_to_hidden = create_dense_layer(in_size, width, **first_layer_kwargs)
+
         if n_layers > 2:
             self.hidden_to_hidden = torch.nn.ModuleList([])
             while n_layers > 2:
                 self.hidden_to_hidden.append(
-                    create_dense_layer(width, width, **linear_kwargs)
+                    create_dense_layer(width, width, **hidden_layer_kwargs)
                 )
         else:
             self.hidden_to_hidden = None
+
         if dueling:
-            self.hidden_to_out = DuelingLayer(width, out_size, **linear_kwargs)
+            self.hidden_to_out = DuelingLayer(width, out_size)
         else:
-            self.hidden_to_out = create_dense_layer(
-                width, out_size, act_func=False, **linear_kwargs
-            )
+            self.hidden_to_out = create_dense_layer(width, out_size, act_func=None)
 
     def forward(self, state_features):
         hidden = self.in_to_hidden(state_features)

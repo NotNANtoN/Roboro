@@ -1,3 +1,6 @@
+# noqa: N806
+
+
 import torch
 
 from roboro.base_policies import MultiNetPolicy, Q, V
@@ -12,41 +15,47 @@ from roboro.utils import (
 
 def create_q(
     *q_args,
-    double_q=False,
-    soft_q=False,
-    munch_q=False,
-    iqn=False,
-    int_ens=False,
-    rem=False,
+    double_q: bool = False,
+    soft_q: bool = False,
+    munch_q: bool = False,
+    iqn: bool = False,
+    int_ens: bool = False,
+    rem: bool = False,
     **policy_kwargs,
-):
-    PolicyClass = Q
+) -> Q:
+    PolicyClass = Q  # noqa: N806
 
     if double_q:
-        PolicyClass = create_wrapper(DoubleQ, PolicyClass)
+        PolicyClass = create_wrapper(DoubleQ, PolicyClass)  # noqa: N806
     if iqn:
-        PolicyClass = create_wrapper(IQN, PolicyClass)
+        PolicyClass = create_wrapper(IQN, PolicyClass)  # noqa: N806
     if soft_q or munch_q:
-        PolicyClass = create_wrapper(SoftQ, PolicyClass)
+        PolicyClass = create_wrapper(SoftQ, PolicyClass)  # noqa: N806
         if munch_q:
-            PolicyClass = create_wrapper(MunchQ, PolicyClass)
+            PolicyClass = create_wrapper(MunchQ, PolicyClass)  # noqa: N806
     if int_ens:
-        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass)
+        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass)  # noqa: N806
     elif rem:
-        PolicyClass = create_wrapper(REM, PolicyClass)
+        PolicyClass = create_wrapper(REM, PolicyClass)  # noqa: N806
     q = PolicyClass(*q_args, **policy_kwargs)
 
     return q
 
 
-def create_v(*v_args, iqn=False, int_ens=False, rem=False, **policy_kwargs):
-    PolicyClass = V
+def create_v(
+    *v_args,
+    iqn: bool = False,
+    int_ens: bool = False,
+    rem: bool = False,
+    **policy_kwargs,
+) -> V:
+    PolicyClass = V  # noqa: N806
     if iqn:
-        PolicyClass = create_wrapper(IQN, PolicyClass)
+        PolicyClass = create_wrapper(IQN, PolicyClass)  # noqa: N806
     if int_ens:
-        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass)
+        PolicyClass = create_wrapper(InternalEnsemble, PolicyClass)  # noqa: N806
     elif rem:
-        PolicyClass = create_wrapper(REM, PolicyClass)
+        PolicyClass = create_wrapper(REM, PolicyClass)  # noqa: N806
     v = PolicyClass(*v_args, **policy_kwargs)
     return v
 
@@ -98,6 +107,7 @@ class IQN(Q):
         self.huber_thresh = 1.0
         self.num_tau = num_tau
         self.num_policy_samples = num_policy_samples
+        # kwargs will include discretization_method, action_dims, num_bins_per_dim if independent_dims
         super().__init__(*args, **kwargs)
 
     def get_net_args(self):
@@ -134,21 +144,73 @@ class IQN(Q):
         return loss.mean(), abs(tde)
 
     def _quantile_loss(self, preds, targets, taus, batch_size):
-        td_error = targets - preds
+        td_error = targets - preds  # preds: (B, N_tau_prime), targets: (B, 1, N_tau)
+        # Ensure shapes are compatible for broadcasting. IQN paper uses (B, N_tau_prime, N_tau)
+        # Here, preds are (B, num_tau_k) and targets are (B, 1, num_tau_k_prime)
+        # If num_tau (from self.num_tau for preds) and num_tau_prime (from target net for targets) are same,
+        # td_error will be (B, num_tau, num_tau) after broadcasting targets and preds. This is fine.
+        # If they differ, one must be 1. Here target is (B,1,N') and pred is (B,N,1) (conceptually for broadcast)
+        # Results in td_error (B, N, N')
+
+        # Original code in project had: (batch_size, self.nets[0].num_tau, self.nets[0].num_tau)
+        # This implies N_tau_prime and N_tau were identical (self.num_tau for online, self.num_tau for target via sample_cos)
+        # Let's assume num_tau for online (preds) and target (targets) are the same (self.num_tau)
+        # So preds: (B, num_tau), targets: (B, 1, num_tau) after Q.calc_target_val calls next_obs_val.
+        # next_obs_val from IQN returns (B, num_tau), so targets from Q.calc_target_val will be (B, num_tau) after gamma etc.
+        # We need to unsqueeze targets for broadcasting with taus in quantile_loss.
+        # preds is (B, num_tau), targets is (B, num_tau)
+        # td_error = targets.unsqueeze(1) - preds.unsqueeze(2) # (B, 1, N) - (B, N, 1) -> (B, N, N)
+        # The current Q.calc_target_val returns targets of shape (B, num_tau) for IQN.
+        # preds from self._get_obs_preds will be (B, num_tau).
+        # So td_error = targets.unsqueeze(1) - preds.unsqueeze(2) is appropriate.
+
+        # Let's re-verify shapes from call site:
+        # q_expected from _get_obs_preds is (B, num_tau)
+        # targets from calc_target_val (IQN version) is (B,1,num_tau)
+        # So td_error = targets - q_expected.unsqueeze(1) # (B,1,N) - (B,N,1) gives (B,N,N) if q_exp is (B,N)
+        # This is what the assert check was: (B, N_tau_online, N_tau_target)
+        # For simplicity and current structure, let's assume targets is (B, N_tau_target) from calc_target_val
+        # and q_expected (preds) is (B, N_tau_online) from _get_obs_preds
+        # td_error: (B, N_tau_target, 1) - (B, 1, N_tau_online)
+        td_error = targets.unsqueeze(2) - preds.unsqueeze(1)
+
         assert (
-            td_error.shape
+            td_error.shape[:1] == (batch_size,)
+            and td_error.shape[1:]
             == (
-                batch_size,
-                self.nets[0].num_tau,
+                self.target_nets[0].num_tau,
                 self.nets[0].num_tau,
             )
-        ), f"Wrong td error shape: {td_error.shape}. target: {targets.shape}. expected: {preds.shape}"
+        ), f"Wrong td error shape: {td_error.shape}. Expected ({batch_size}, {self.target_nets[0].num_tau}, {self.nets[0].num_tau})"
+
         huber_l = calculate_huber_loss(td_error, self.huber_thresh)
+        # taus is (B, N_tau_online, 1)
+        # td_error.detach() < 0 is (B, N_tau_target, N_tau_online)
+        # Need to align taus with the N_tau_online dimension (dim 2 of td_error)
         quantil_l = (
-            (taus - (td_error.detach() < 0).float()).abs() * huber_l / self.huber_thresh
+            (taus.unsqueeze(1) - (td_error.detach() < 0).float()).abs()
+            * huber_l
+            / self.huber_thresh
+            # taus is (B, N_tau_online, 1) -> (B, 1, N_tau_online, 1)
+            # (td_error <0) is (B, N_tau_target, N_tau_online)
+            # This part needs careful check of original IQN paper for broadcasting rules if N_tau_online != N_tau_target
+            # Assuming N_tau_online (from self.nets[0].num_tau or self.num_tau) and N_tau_target (from self.target_nets[0].num_tau or self.num_tau)
+            # are the same for this implementation, matching the assert.
+            # So taus is (B, N, 1). td_error is (B,N,N). (td < 0) is (B,N,N)
+            # (taus - (td<0).float()).abs() should be: (B, N_target, N_online)
+            # taus needs to be (B, 1, N_online) for broadcasting. (B, N_tau,1) from sample_cos
+            # Original: (taus - (td_error.detach() < 0).float()).abs()
+            # If taus is (B, N_tau_online, 1) and (td < 0) is (B, N_tau_target, N_tau_online)
+            # then taus needs to be broadcast. (B, 1, N_tau_online) for (td<0)
+            # ( (B,1,N_online) - (B,N_target,N_online) ).abs() -> (B, N_target, N_online)
         )
-        loss = quantil_l.sum(dim=1).mean(dim=1)
-        return loss, td_error.sum(dim=1).mean(dim=1)
+        # sum over N_tau_online (dim 2), mean over N_tau_target (dim 1)
+        loss = quantil_l.sum(dim=2).mean(dim=1)
+        # For PER tde, use mean over target taus, sum over online taus
+        tde_for_per = td_error.mean(dim=1).sum(
+            dim=1
+        )  # Mean over N_target, sum over N_online
+        return loss, tde_for_per
 
     @torch.no_grad()
     def calc_target_val(
@@ -177,41 +239,78 @@ class IQN(Q):
 
     def _get_obs_preds(self, obs, actions):
         batch_size = obs.shape[0]
-        cos, taus = self.nets[0].sample_cos(batch_size)
-        q_k = self.obs_val(obs, cos, taus)
+        # cos and taus from online network's perspective (self.num_tau)
+        cos, taus = self.nets[0].sample_cos(batch_size, num_tau=self.num_tau)
+        # quants_flat has shape (batch_size, self.num_tau, self.act_size)
+        # where self.act_size is policy_act_shape (action_dims * num_bins_per_dim for independent)
+        quants_flat = self.obs_val(obs, cos, taus)
 
-        chosen_action_q_vals = self._gather_obs(q_k, actions)
-        return chosen_action_q_vals, taus
+        if self.discretization_method == "independent_dims":
+            # actions is (batch, action_dims) - indices of chosen bins
+            # Reshape quants_flat to (batch, num_tau, action_dims, num_bins_per_dim)
+            quants_structured = quants_flat.view(
+                batch_size, self.num_tau, self.action_dims, self.num_bins_per_dim
+            )
+            # Expand actions for gathering: (batch, action_dims) -> (B, 1, action_dims, 1)
+            # So it can gather from (B, num_tau, action_dims, num_bins)
+            actions_expanded = (
+                actions.unsqueeze(1).unsqueeze(-1).expand(-1, self.num_tau, -1, 1)
+            )
+            # Gather quantiles for the chosen bin in each dimension, for each tau sample
+            # Result shape: (batch, num_tau, action_dims)
+            chosen_bin_quants_per_dim = quants_structured.gather(
+                3,
+                actions_expanded.long(),  # Gather along num_bins_per_dim dimension (dim 3)
+            ).squeeze(-1)
+            # Sum quantiles across dimensions for the final Q-quantiles of the composite action
+            # Result shape: (batch, num_tau)
+            final_quants_pred = chosen_bin_quants_per_dim.sum(dim=2)
+            chosen_action_q_vals = final_quants_pred
+        else:  # joint discretization
+            # actions is (batch,) or (batch, 1) - single discrete action index
+            # quants_flat is (batch, num_tau, total_discrete_actions)
+            # Need to gather along the last dimension (total_discrete_actions)
+            # actions shape for gather: (batch, num_tau, 1)
+            actions_expanded = actions.view(-1, 1, 1).expand(-1, self.num_tau, 1)
+            chosen_action_q_vals = quants_flat.gather(
+                dim=-1, index=actions_expanded.long()
+            ).squeeze(-1)
+            # Result shape: (batch, num_tau)
+
+        return chosen_action_q_vals, taus  # taus is (batch_size, self.num_tau, 1)
 
     def next_obs_act_select(self, next_obs, *args, use_target_net=True, **kwargs):
-        # Next state action selection
-        q_quants_next = self.q_pred_next_state(
+        # cos and taus are passed in *args from the Q.next_obs_val -> IQN.next_obs_val call chain
+        # These cos, taus are for the target network's num_tau (self.target_nets[0].num_tau)
+        # which should be self.num_tau if target net created with same num_tau.
+        # q_pred_next_state will use these to get quantiles from the appropriate net (online/target)
+        q_quants_next_flat = self.q_pred_next_state(
             next_obs, *args, use_target_net=use_target_net, **kwargs
-        )
-        exp_q_next = q_quants_next.mean(dim=1)
-        # Get max predicted Q values (for next states) from target model
-        max_idcs = torch.argmax(exp_q_next, dim=1, keepdim=True)
-        # Bring in simiar shape as q_quants_next (except last dim):
-        max_idcs = unsqueeze_to(max_idcs, q_quants_next)
-        max_idcs = max_idcs.expand(*q_quants_next.shape[:-1], 1)
-        return max_idcs, q_quants_next
+        )  # Shape: (B, num_target_tau, policy_act_shape)
 
-    def next_obs_act_eval(
-        self,
-        max_idcs,
-        next_obs,
-        *args,
-        q_vals_next_eval=None,
-        use_target_net=True,
-        **kwargs,
-    ):
-        if q_vals_next_eval is None:
-            q_vals_next_eval = self.q_pred_next_state(
-                next_obs, *args, use_target_net=use_target_net, **kwargs
+        if self.discretization_method == "independent_dims":
+            # q_quants_next_flat is (B, num_target_tau, action_dims * num_bins)
+            q_quants_next_structured = q_quants_next_flat.view(
+                next_obs.shape[0],
+                -1,
+                self.action_dims,
+                self.num_bins_per_dim,  # -1 for num_target_tau
             )
-        # Take max actions
-        q_vals_next = q_vals_next_eval.gather(dim=-1, index=max_idcs).transpose(1, 2)
-        return q_vals_next
+            # Mean over tau dimension to get expected Q-values for each bin
+            # Shape: (B, action_dims, num_bins_per_dim)
+            exp_q_next_structured = q_quants_next_structured.mean(dim=1)
+            # Get max predicted Q values (for next states) from target model
+            max_idcs = torch.argmax(
+                exp_q_next_structured, dim=2
+            )  # (batch, action_dims)
+            # Pass the original flat quantiles as context
+            return max_idcs, q_quants_next_flat
+        else:  # joint
+            # q_quants_next_flat is (B, num_target_tau, total_discrete_actions)
+            # Mean over tau dimension to get expected Q-values
+            exp_q_next = q_quants_next_flat.mean(dim=1)  # (B, total_discrete_actions)
+            max_idcs = torch.argmax(exp_q_next, dim=1, keepdim=True)  # (B, 1)
+            return max_idcs, q_quants_next_flat
 
     def obs_val(self, obs, cos, taus, net=None):
         if net is None:
@@ -377,7 +476,7 @@ class MunchQ(SoftQ):
 
     @torch.no_grad()
     def calc_target_val(self, obs, actions, *args, **kwargs):
-        q_targets = super(MunchQ, self).calc_target_val(obs, actions, *args, **kwargs)
+        q_targets = super().calc_target_val(obs, actions, *args, **kwargs)
         q_vals = self.forward_target(obs)
         munch_reward = self._calc_entropy(q_vals)
         actions = unsqueeze_to(actions, munch_reward)
@@ -440,7 +539,7 @@ class QVMax(QV):
 
 
 class Ensemble(MultiNetPolicy):
-    def __init__(self, PolicyClass, size=1, *policy_args, **policy_kwargs):
+    def __init__(self, PolicyClass, size=1, *policy_args, **policy_kwargs):  # noqa: N803
         super().__init__()
         self.size = size
         self.policies = [

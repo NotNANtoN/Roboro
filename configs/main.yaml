@@ -1,7 +1,7 @@
 defaults:
   - _self_
+  - policy: best
   - env:
-  - policy: q
   - hydra/launcher: basic  # joblib (parallel) or basic (serial)
 
 path:
@@ -10,7 +10,6 @@ render: 0
 env_steps: 10000
 
 trainer:
-#  weights_summary: "full"
   gradient_clip_val: 1.0  # 0 means don't clip
   precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
 
@@ -55,6 +54,9 @@ agent:
   munch_q: 0
   int_ens: 0
   rem: 0
+  # New discretization parameters
+  discretization_method: "joint"  # Options: "joint", "independent_dims"
+  num_bins_per_dim: 5           # Used if discretization_method is "independent_dims", or by wrapper if "joint"
   # learn alg params
   clip_rewards: 0
   eps_start: 1.0
@@ -72,9 +74,12 @@ agent:
       dueling: 0
       noisy_layers: 0
       width: 256
+      activation_fn: "relu"  # Options: "relu", "mish"
+      use_layer_norm: false  # Whether to use layer normalization after each layer
+      dropout_rate: 0.0  # Dropout rate (None for no dropout)
 
 
-# To read the modified CLI args and set the MLflow run_name according to it:
+# To read the modified CLI args and set the wandb run_name according to it:
 override_args: ${hydra:job.override_dirname}
 
 # Optionally exclude some keys from the run_name:

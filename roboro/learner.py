@@ -1,10 +1,11 @@
-from typing import Any, List, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.optim as optim
 from omegaconf import DictConfig, open_dict
+from pytorch_lightning.utilities import grad_norm
 from torch.optim.optimizer import Optimizer
 
 from roboro.agent import Agent
@@ -30,15 +31,15 @@ class Learner(pl.LightningModule):
     def __init__(
         self,
         steps: int = 100000,
-        train_env: str = None,
-        train_ds: str = None,
-        val_env: str = None,
-        val_ds: str = None,
-        test_env: str = None,
-        test_ds: str = None,
+        train_env: str | None = None,
+        train_ds: str | None = None,
+        val_env: str | None = None,
+        val_ds: str | None = None,
+        test_env: str | None = None,
+        test_ds: str | None = None,
         batch_size: int = 32,
         num_workers: int = 0,
-        buffer_conf: DictConfig = None,
+        buffer_conf: DictConfig | None = None,
         warm_start_size: int = 1000,
         steps_per_batch: int = 1,
         sticky_actions: float = 0.0,
@@ -47,9 +48,9 @@ class Learner(pl.LightningModule):
         grayscale: int = 0,
         discretize_actions: bool = False,
         num_bins_per_dim: int = 5,
-        render_mode: str = None,
-        agent_conf: DictConfig = None,
-        opt_conf: DictConfig = None,
+        render_mode: str | None = None,
+        agent_conf: DictConfig | None = None,
+        opt_conf: DictConfig | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -58,6 +59,23 @@ class Learner(pl.LightningModule):
         with open_dict(agent_conf):
             agent_conf.policy.gamma = new_gamma
         print("Buffer: ", self.buffer)
+
+        # Determine if the old ActionDiscretizerWrapper should be used
+        use_action_discretizer_wrapper = (
+            discretize_actions  # Original flag from learner config
+        )
+        if (
+            agent_conf
+            and hasattr(agent_conf, "discretization_method")
+            and agent_conf.discretization_method == "independent_dims"
+        ):
+            use_action_discretizer_wrapper = (
+                False  # Agent handles discretization internally
+            )
+            print(
+                "Agent uses 'independent_dims' discretization. ActionDiscretizerWrapper will be disabled if it was enabled by learner config."
+            )
+
         # Create envs and dataloaders
         self.datamodule = RLDataModule(
             self.buffer,
@@ -71,11 +89,13 @@ class Learner(pl.LightningModule):
             frameskip=frameskip,
             sticky_action_prob=sticky_actions,
             grayscale=grayscale,
-            discretize_actions=discretize_actions,
-            num_bins_per_dim=num_bins_per_dim,
+            discretize_actions=use_action_discretizer_wrapper,  # Conditional
+            num_bins_per_dim=num_bins_per_dim,  # Passed for ActionDiscretizerWrapper if used
             render_mode=render_mode,
             batch_size=batch_size,
             num_workers=num_workers,
+            total_training_steps=steps,
+            warm_start_steps=warm_start_size,
         )
         self.train_env, self.train_obs = self.datamodule.get_train_env()
         self.val_env, self.val_obs = self.datamodule.get_val_env()
@@ -83,9 +103,9 @@ class Learner(pl.LightningModule):
         # init agent
         self.agent = Agent(
             self.train_env.observation_space,
-            self.train_env.action_space,
+            self.train_env.action_space,  # Agent will see original action space
             warm_start_steps=warm_start_size,
-            **agent_conf,
+            **agent_conf,  # agent_conf should contain discretization_method, num_bins_per_dim
         )
         self.agent.log = self.log
         self.agent.policy.log = self.log
@@ -117,13 +137,16 @@ class Learner(pl.LightningModule):
         self.lr = opt_conf.lr
         self.opt_eps = opt_conf.eps
 
-    def forward(self, obs: Union[torch.Tensor, Tuple]) -> int:
+    def forward(self, obs: torch.Tensor | tuple) -> int:
         # If obs is a tuple, take the first element which should be the observation tensor
         if isinstance(obs, tuple):
             obs = obs[0]
-        obs = obs.to(self.device, self.dtype).unsqueeze(0)
-        action = self.agent(obs).item()
-        return action
+        obs_batch = obs.to(self.device, self.dtype).unsqueeze(0)
+        # Agent.forward returns chosen_bin_indices (if independent_dims) or single action_idx (if joint)
+        agent_action = self.agent(obs_batch)
+        return agent_action.squeeze(
+            0
+        )  # Remove batch dimension, result is (action_dims,) or scalar
 
     def on_fit_start(self):
         """Fill the replay buffer with explorative experiences"""
@@ -261,7 +284,7 @@ class Learner(pl.LightningModule):
         if batch is not None:
             pass
 
-    def test_epoch_end(self, outputs: List[Any]) -> None:
+    def test_epoch_end(self, outputs: list[Any]) -> None:
         """Evaluate the agent for n episodes"""
         if self.test_env is None:
             return
@@ -282,11 +305,43 @@ class Learner(pl.LightningModule):
     def step_agent(self, obs, env, store=False):
         with torch.no_grad():
             action = self(obs)
-        next_state, r, terminated, truncated, _ = env.step(action)
+
+        # 'action' from self(obs) is chosen_bin_indices if independent_dims, or single action_idx if joint
+        if self.agent.discretization_method == "independent_dims":
+            # Convert chosen_bin_indices to continuous action for the environment
+            # self.agent.action_low and self.agent.action_high are buffers, should be on agent's device
+            # Ensure action (bin_indices) is on the same device before mapping
+            action_for_env = (
+                self.agent._map_chosen_bin_indices_to_continuous_actions(
+                    action.unsqueeze(0).to(
+                        self.agent.action_low.device
+                    )  # Add batch dim and move to device
+                )
+                .squeeze(0)
+                .cpu()
+                .numpy()
+            )  # Remove batch dim and move to CPU for env
+            action_to_store = action.cpu().numpy()  # Store bin indices (as numpy)
+        else:  # joint discretization (ActionDiscretizerWrapper handles mapping if it was used)
+            action_for_env = action.item()  # action is a scalar tensor
+            action_to_store = action.item()  # Store the single discrete action index
+
+        next_state, r, terminated, truncated, _ = env.step(action_for_env)
         is_done = terminated or truncated
         # add to buffer
         if store:
-            self.buffer.add(state=obs, action=action, reward=r, done=is_done)
+            # Ensure obs is in a storable format (e.g. numpy array from tensor if needed)
+            # Assuming obs is already in a suitable format from env.reset() or previous step
+            # storable_obs = obs.cpu().numpy() if isinstance(obs, torch.Tensor) else obs # Old way
+            # New way: store as CPU tensor. Assumes obs is a tensor due to ToTensor wrapper.
+            if isinstance(obs, torch.Tensor):
+                storable_obs = obs.cpu()
+            else:  # Should not happen if ToTensor wrapper is used, but as a fallback
+                storable_obs = torch.from_numpy(np.array(obs, dtype=np.float32)).cpu()
+
+            self.buffer.add(
+                state=storable_obs, action=action_to_store, reward=r, done=is_done
+            )
         return next_state, action, r, is_done
 
     def run(
@@ -294,10 +349,10 @@ class Learner(pl.LightningModule):
         env,
         n_steps=0,
         n_eps: int = 0,
-        epsilon: float = None,
+        epsilon: float | None = None,
         store=False,
         render=False,
-    ) -> List[int]:
+    ) -> list[int]:
         """
         Carries out N episodes or N steps of the environment with the current agent
         Args:
@@ -351,3 +406,15 @@ class Learner(pl.LightningModule):
         items.pop("v_num", None)
 
         return items
+
+    def on_before_optimizer_step(self, optimizer):
+        """Track gradient norms every 100 steps using Lightning's grad_norm utility."""
+        print("on_before_optimizer_step. train_step_count: ", self.train_step_count)
+        if self.train_step_count % 100 == 0:  # Only log every 100 steps
+            print("DOING GRAD NORM")
+            # Compute the 2-norm for each layer
+            # If using mixed precision, the gradients are already unscaled here
+            norms = grad_norm(
+                self.agent, norm_type=2
+            )  # Track norms for the agent's layers
+            self.log_dict(norms)

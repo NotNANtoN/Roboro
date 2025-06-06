@@ -5,8 +5,8 @@ import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import MLFlowLogger
+from pytorch_lightning.callbacks import Callback, ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 
 from roboro.learner import Learner
 
@@ -34,6 +34,9 @@ def test_agent(agent, env, render=False):
     total_return = 0
     while not done:
         action = agent(obs)
+        # Move action to CPU before converting to numpy
+        if torch.is_tensor(action):
+            action = action.cpu()
         next_obs, reward, terminated, truncated, _ = env.step(action)
         obs = next_obs
         if render:
@@ -49,7 +52,7 @@ def main(conf: DictConfig):
     # Deal with args
     print("Args:")
     print(OmegaConf.to_yaml(conf))
-    # keep original working directory for mlflow etc
+    # keep original working directory for wandb etc
     os.chdir(hydra.utils.get_original_cwd())
     learner_args = conf.learner
     trainer_args = conf.trainer
@@ -77,7 +80,11 @@ def main(conf: DictConfig):
             save_top_k=3,
             mode="max",
         )
-        # Set up mlflowlogger
+
+        # Set up callbacks
+        callbacks: list[Callback] = [checkpoint_callback]
+
+        # Set up wandb logger
         exp_name = (
             conf.learner.train_env
             if conf.learner.train_env is not None
@@ -86,9 +93,7 @@ def main(conf: DictConfig):
         ovargs = conf.override_args
         ovargs = filter_out_env_override(ovargs)
         print(exp_name, ovargs)
-        mlf_logger = MLFlowLogger(
-            experiment_name=exp_name, tags={"mlflow.runName": ovargs}
-        )
+        wandb_logger = WandbLogger(project=exp_name, name=ovargs, save_dir="wandb_logs")
 
         # early_stop_callback = EarlyStopping(
         #         monitor='steps',
@@ -123,8 +128,8 @@ def main(conf: DictConfig):
             max_steps=max_batches,
             accelerator=accelerator,
             devices=devices,
-            callbacks=[checkpoint_callback],
-            logger=mlf_logger,
+            callbacks=callbacks,
+            logger=wandb_logger,
             deterministic=deterministic,
             **trainer_args,
         )

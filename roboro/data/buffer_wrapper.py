@@ -14,19 +14,19 @@ def create_buffer(
     # Create replay buffer
     buffer_args = [buffer_size]
     # buffer_kwargs.update{'update_freq': update_freq}
-    BufferClass = RLBuffer
+    BufferClass = RLBuffer  # noqa: N806
     if per:
-        BufferClass = create_wrapper(PER, BufferClass)
+        BufferClass = create_wrapper(PER, BufferClass)  # noqa: N806
         # buffer_kwargs.update({'beta_start': 0.4,
         #                      'alpha': 0.6})
     if n_step > 1:
-        BufferClass = create_wrapper(NStep, BufferClass)
+        BufferClass = create_wrapper(NStep, BufferClass)  # noqa: N806
         buffer_kwargs.update({"n_step": n_step, "gamma": gamma})
         gamma = gamma**n_step
     if cer:
-        BufferClass = create_wrapper(CER, BufferClass)
+        BufferClass = create_wrapper(CER, BufferClass)  # noqa: N806
     if her:
-        BufferClass = create_wrapper(HER, BufferClass)
+        BufferClass = create_wrapper(HER, BufferClass)  # noqa: N806
         # Default HER parameters can be overridden in buffer_kwargs
     buffer = BufferClass(*buffer_args, **buffer_kwargs)
     return buffer, gamma
@@ -265,10 +265,9 @@ class HER(RLBuffer):
             denominator = 1.0 - self.her_ratio
             k_to_add = int(round(self.her_ratio / denominator))
 
-        # Determine the number of loops for adding HER transitions.
-        # This is capped by the number of available future_transitions,
-        # similar to the original implementation's min(4, len(future_transitions)).
-        num_loops_for_her = min(k_to_add, len(future_transitions))
+        # Calculate the number of loops for adding HER transitions.
+        # This is capped by the number of available future transitions possible
+        num_loops_for_her = min(k_to_add, len(self.current_episode) - 1)
 
         # Add additional HER transitions for this episode
         for i, transition in enumerate(
@@ -369,7 +368,7 @@ class PER(RLBuffer):
         if torch.is_tensor(priorities):
             priorities = priorities.tolist()
         assert len(idcs) == len(priorities)
-        for idx, priority in zip(idcs, priorities):
+        for idx, priority in zip(idcs, priorities, strict=False):
             if priority == 0:
                 priority += 0.001
             assert priority > 0, f"priority: {priority}"

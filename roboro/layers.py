@@ -3,11 +3,45 @@ import math
 import torch
 
 
-def create_dense_layer(in_size, out_size, noisy_linear=False, act_func=True):
+def get_activation(activation_name: str = "relu") -> torch.nn.Module:
+    """Returns the activation function based on the name"""
+    if activation_name.lower() == "mish":
+        return torch.nn.Mish()
+    elif activation_name.lower() == "relu":
+        return torch.nn.ReLU()
+    return torch.nn.ReLU(True)  # Default to ReLU
+
+
+def create_dense_layer(
+    in_size: int,
+    out_size: int,
+    noisy_linear: bool = False,
+    act_func: str | None = None,
+    use_layer_norm: bool = False,
+    dropout_rate: float | None = None,
+) -> torch.nn.Module:
+    """Creates a dense layer with optional layer normalization and dropout
+
+    Args:
+        in_size: input size
+        out_size: output size
+        noisy_linear: whether to use noisy linear layer
+        act_func: activation function name or None
+        use_layer_norm: whether to use layer normalization
+        dropout_rate: dropout rate (None for no dropout)
+    """
     create_linear = NoisyLinear if noisy_linear else torch.nn.Linear
     module_list = [create_linear(in_size, out_size)]
+
+    if use_layer_norm:
+        module_list.append(torch.nn.LayerNorm(out_size))
+
+    if dropout_rate is not None and dropout_rate > 0:
+        module_list.append(torch.nn.Dropout(p=dropout_rate))
+
     if act_func:
-        module_list.append(torch.nn.ReLU(True))
+        module_list.append(get_activation(act_func))
+
     modules = torch.nn.Sequential(*module_list)
     return modules
 
@@ -17,7 +51,13 @@ class DuelingLayer(torch.nn.Module):
     MLP network with duel heads for val and advantage
     """
 
-    def __init__(self, in_size, out_size, v_head=None, **linear_kwargs):
+    def __init__(
+        self,
+        in_size: int,
+        out_size: int,
+        v_head: torch.nn.Module | None = None,
+        **linear_kwargs,
+    ):
         """
         Args:
             input_shape: observation shape of the environment
@@ -35,7 +75,7 @@ class DuelingLayer(torch.nn.Module):
         else:
             self.head_val = v_head
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through layer. Calculates the Q using the value and advantage
         Args:
@@ -70,7 +110,7 @@ class NoisyLinear(torch.nn.Linear):
             sigma_init: initial fill value of noisy weights
             bias: flag to include bias to linear layer
         """
-        super(NoisyLinear, self).__init__(in_features, out_features, bias=bias)
+        super().__init__(in_features, out_features, bias=bias)
 
         weights = torch.full((out_features, in_features), sigma_init)
         self.sigma_weight = torch.nn.Parameter(weights)
@@ -91,7 +131,7 @@ class NoisyLinear(torch.nn.Linear):
         self.weight.data.uniform_(-std, std)
         self.bias.data.uniform_(-std, std)
 
-    def forward(self, input_x):
+    def forward(self, input_x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the layer
         Args:

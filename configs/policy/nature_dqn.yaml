@@ -29,3 +29,5 @@ agent:
     gamma: 0.99
     net:
         width: 512
+        activation_fn: "relu"  # Options: "relu", "mish"
+        use_layer_norm: false  # Whether to use layer normalization after each layer
