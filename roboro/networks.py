@@ -31,6 +31,17 @@ class CNN(torch.nn.Module):
             torch.nn.Linear(conv_out_size, feat_size), activation
         )
 
+        # Initialize weights for reproducibility
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize network weights for reproducibility"""
+        for m in self.modules():
+            if isinstance(m, (torch.nn.Conv2d | torch.nn.Linear)):
+                torch.nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+
     def get_conv_out_size(self, shape) -> int:
         """
         Calculates the output size of the last conv layer
@@ -95,6 +106,18 @@ class MLP(torch.nn.Module):
         else:
             self.hidden_to_out = create_dense_layer(width, out_size, act_func=None)
 
+        # Initialize weights for reproducibility
+        if not noisy_layers:  # Skip for noisy layers as they have custom initialization
+            self._init_weights()
+
+    def _init_weights(self):
+        """Initialize network weights for reproducibility"""
+        for m in self.modules():
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+
     def forward(self, state_features):
         hidden = self.in_to_hidden(state_features)
         out = self.hidden_to_out(hidden)
@@ -131,6 +154,18 @@ class IQNNet(torch.nn.Module):
         self.cos_embedding = torch.nn.Linear(self.n_cos, self.cos_layer_out)
         # processing layers
         self.out_mlp = MLP(width, act_size, **net_kwargs)
+
+        # Initialize weights for reproducibility
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize network weights for reproducibility"""
+        torch.nn.init.kaiming_normal_(self.head.weight, nonlinearity="relu")
+        if self.head.bias is not None:
+            torch.nn.init.constant_(self.head.bias, 0)
+        torch.nn.init.kaiming_normal_(self.cos_embedding.weight, nonlinearity="relu")
+        if self.cos_embedding.bias is not None:
+            torch.nn.init.constant_(self.cos_embedding.bias, 0)
 
     def forward(self, obs, num_quantiles=None):
         if num_quantiles is None:

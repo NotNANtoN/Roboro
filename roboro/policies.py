@@ -367,14 +367,32 @@ class DoubleQ(Q):
 class InternalEnsemble(Q):
     def __init__(self, *args, size=4, **kwargs):
         """Implements an internal ensemble that averages over the prediction of many Q-heads."""
-        super().__init__(*args, **kwargs)
+        # For reproducible ensemble initialization, create different seeds for each member
+        # while maintaining overall reproducibility
         self.size = size
+
+        # Store original RNG state
+        original_torch_state = torch.get_rng_state()
+
+        # Create ensemble with different but deterministic initialization
+        super().__init__(*args, **kwargs)
         self.q_net = None
         self.q_net_target = None
-        self.nets = torch.nn.ModuleList(self.create_net() for _ in range(size))
-        self.target_nets = torch.nn.ModuleList(
-            self.create_net(target=True) for _ in range(size)
-        )
+
+        # Create nets with different seeds for diversity
+        torch.manual_seed(torch.initial_seed() + 1000)  # Offset for ensemble
+        self.nets = torch.nn.ModuleList()
+        self.target_nets = torch.nn.ModuleList()
+
+        for i in range(size):
+            # Set different seed for each ensemble member
+            torch.manual_seed(torch.initial_seed() + 1000 + i)
+            self.nets.append(self.create_net())
+            torch.manual_seed(torch.initial_seed() + 1000 + i)  # Same seed for target
+            self.target_nets.append(self.create_net(target=True))
+
+        # Restore original RNG state
+        torch.set_rng_state(original_torch_state)
 
     def __str__(self):
         return f"IntEns_{self.size}<{super().__str__()}>"
@@ -556,7 +574,13 @@ class QVMax(QV):
 
 
 class Ensemble(MultiNetPolicy):
-    def __init__(self, PolicyClass, size=1, *policy_args, **policy_kwargs):  # noqa: N803
+    def __init__(
+        self,
+        PolicyClass,
+        size=1,
+        *policy_args,
+        **policy_kwargs,  # noqa: N803
+    ):  # noqa: N803
         super().__init__()
         self.size = size
         self.policies = [

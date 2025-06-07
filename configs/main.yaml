@@ -5,7 +5,7 @@ defaults:
   - hydra/launcher: basic  # joblib (parallel) or basic (serial)
 
 path:
-seed:
+seed: 42
 render: 0
 env_steps: 10000
 

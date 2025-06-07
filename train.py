@@ -56,6 +56,12 @@ def main(conf: DictConfig):
     os.chdir(hydra.utils.get_original_cwd())
     learner_args = conf.learner
     trainer_args = conf.trainer
+    # Apply seed if wanted
+    deterministic = False
+    if conf.seed is not None:
+        seed_everything(conf.seed)
+        deterministic = True
+
     # Create agent and learner
     if conf.path is not None:
         # load from checkpoint
@@ -69,6 +75,7 @@ def main(conf: DictConfig):
             opt_conf=conf.opt,
             buffer_conf=conf.buffer,
             render_mode=render_mode,
+            seed=conf.seed,
             **learner_args,
         )
         # Do the training!
@@ -102,11 +109,6 @@ def main(conf: DictConfig):
         #         verbose=False,
         # )
 
-        # Apply seed if wanted
-        deterministic = False
-        if conf.seed is not None:
-            seed_everything(conf.seed)
-            deterministic = True
         # Calculate number of training batches based off maximal number of env steps
         frameskip = learner_args.frameskip if learner_args.frameskip > 0 else 1
         max_batches = conf.env_steps / frameskip / learner_args.steps_per_batch

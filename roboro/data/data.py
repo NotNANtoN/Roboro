@@ -19,7 +19,8 @@ class RLDataModule(pl.LightningDataModule):
         num_workers=0,
         discretize_actions: bool = False,
         num_bins_per_dim: int = 5,
-        render_mode: str = None,
+        render_mode: str | None = None,
+        seed: int | None = None,
         **env_kwargs,
     ):
         super().__init__()
@@ -37,6 +38,7 @@ class RLDataModule(pl.LightningDataModule):
                 discretize_actions=discretize_actions,
                 num_bins_per_dim=num_bins_per_dim,
                 render_mode=render_mode,
+                seed=seed,
                 **env_kwargs,
             )
             print(self.train_env)
@@ -52,6 +54,7 @@ class RLDataModule(pl.LightningDataModule):
                 discretize_actions=discretize_actions,
                 num_bins_per_dim=num_bins_per_dim,
                 render_mode=render_mode,
+                seed=seed,
                 **env_kwargs,
             )
         if self.val_env:
@@ -67,6 +70,7 @@ class RLDataModule(pl.LightningDataModule):
                 discretize_actions=discretize_actions,
                 num_bins_per_dim=num_bins_per_dim,
                 render_mode=render_mode,
+                seed=seed,
                 **env_kwargs,
             )
         if self.test_env:

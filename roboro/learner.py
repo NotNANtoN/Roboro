@@ -51,6 +51,7 @@ class Learner(pl.LightningModule):
         render_mode: str | None = None,
         agent_conf: DictConfig | None = None,
         opt_conf: DictConfig | None = None,
+        seed: int | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -96,6 +97,7 @@ class Learner(pl.LightningModule):
             num_workers=num_workers,
             total_training_steps=steps,
             warm_start_steps=warm_start_size,
+            seed=seed,
         )
         self.train_env, self.train_obs = self.datamodule.get_train_env()
         self.val_env, self.val_obs = self.datamodule.get_val_env()

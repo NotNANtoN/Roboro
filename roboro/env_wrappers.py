@@ -21,6 +21,15 @@ try:
 except ModuleNotFoundError:
     print("Gymnasium-robotics could not be loaded - Fetch environments unavailable")
 
+# Register ALE environments
+try:
+    import ale_py
+
+    gym.register_envs(ale_py)
+    print("ALE environments registered successfully")
+except ModuleNotFoundError:
+    print("ALE could not be loaded - Atari environments unavailable")
+
 from roboro.utils import apply_rec_to_dict, apply_to_state_list
 
 atari_env_names = [
@@ -403,11 +412,17 @@ def create_env(
     render_mode: str | None = None,
     total_training_steps: int | None = None,
     warm_start_steps: int | None = None,
+    seed: int | None = None,  # Add seed parameter
 ):
     # Init env:
     env = gym.make(
         env_name, render_mode="rgb_array"
     )  # Always use rgb_array for video recording
+
+    # Seed environment if provided
+    if seed is not None:
+        env.action_space.seed(seed)
+        env.observation_space.seed(seed)
 
     # Handle dictionary observations from multi-goal environments (like FetchReach)
     if hasattr(env.observation_space, "spaces") or isinstance(
@@ -528,9 +543,9 @@ class AtariObsWrapper(gym.ObservationWrapper):
         obs = obs.astype(np.uint8)
         return obs
 
-    def reset(self):
+    def reset(self, **kwargs):
         self.last_obs = None
-        return super().reset()
+        return super().reset(**kwargs)
 
 
 class FrameSkip(gym.Wrapper):
@@ -657,27 +672,27 @@ class LazyFrames:
         return stacked.to(*args, **kwargs)
 
     def __array__(self, dtype=None):
-        print("Access forbidden array")
         out = self.get_stacked_frames()
         if dtype is not None:
-            out = out.type(dtype)
-        return out
+            # Convert numpy dtype to PyTorch dtype if needed
+            if hasattr(dtype, "type"):  # numpy dtype
+                out = out.numpy().astype(dtype)
+                return out
+            else:  # assume PyTorch dtype
+                out = out.type(dtype)
+        return out.numpy() if hasattr(out, "numpy") else out
 
     def __len__(self):
-        print("Access forbidden len")
         return len(self.get_stacked_frames())
 
     def __getitem__(self, i):
-        print("Access forbidden getitem")
         return self._frames[i]
 
     def count(self):
-        print("Access forbidden count")
         frames = self.get_stacked_frames()
         return frames.shape[frames.ndim - 1]
 
     def frame(self, i):
-        print("Access forbidden frame")
         return self.get_stacked_frames()[..., i]
 
 
