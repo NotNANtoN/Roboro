@@ -1,6 +1,8 @@
 # noqa: N806
 
 
+import random
+
 import torch
 
 from roboro.base_policies import MultiNetPolicy, Q, V
@@ -73,6 +75,21 @@ def create_policy(
     rem=False,
     int_ens=False,
 ):
+    if int_ens:  # if user wants an ensemble
+        # The q_creation_kwargs are for the base Q-networks inside the ensemble
+        q_creation_kwargs = {
+            "double_q": double_q,
+            "iqn": iqn,
+            "soft_q": use_soft_q,
+            "munch_q": use_munch_q,
+            "rem": False,  # REM is a different ensemble strategy, disable it
+        }
+        # policy_kwargs may contain ensemble specific params like size
+        ensemble_kwargs = policy_kwargs.pop("ensemble", {})
+        q_args = (obs_size, act_size)
+
+        return EnsembleQ(q_args, q_creation_kwargs, policy_kwargs, **ensemble_kwargs)
+
     q_args = (obs_size, act_size)
     q_creation_kwargs = {
         "double_q": double_q,
@@ -560,3 +577,88 @@ class Ensemble(MultiNetPolicy):
         losses = torch.stack([policy.calc_loss(*args) for policy in self.policies])
         loss = losses.mean()
         return loss
+
+
+class EnsembleQ(MultiNetPolicy):
+    def __init__(
+        self,
+        q_args: tuple,
+        q_creation_kwargs: dict,
+        policy_kwargs: dict,
+        size: int = 5,
+        num_sampled_nets: int = 2,
+    ):
+        super().__init__(gamma=policy_kwargs.get("gamma"))
+        self.size = size
+        self.num_sampled_nets = num_sampled_nets
+        if self.num_sampled_nets > self.size:
+            print(
+                f"Warning: num_sampled_nets ({self.num_sampled_nets}) > ensemble size ({self.size})."
+                f"Clamping to {self.size}."
+            )
+            self.num_sampled_nets = self.size
+
+        self.policies: torch.nn.ModuleList = torch.nn.ModuleList(
+            [
+                create_q(*q_args, **q_creation_kwargs, **policy_kwargs)
+                for _ in range(size)
+            ]
+        )
+
+        # for target net updates
+        self.nets = []
+        self.target_nets = []
+        for p in self.policies:
+            self.nets.extend(p.nets)
+            self.target_nets.extend(p.target_nets)
+
+    def __str__(self):
+        return f"EnsembleQ(size={self.size}, sampled={self.num_sampled_nets})<{str(self.policies[0])}>"
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        sampled_policies = random.sample(list(self.policies), self.num_sampled_nets)
+        q_values = torch.stack([p(obs) for p in sampled_policies])
+        min_q_values, _ = torch.min(q_values, dim=0)
+        return min_q_values
+
+    @torch.no_grad()
+    def get_next_obs_val(self, next_obs: torch.Tensor) -> torch.Tensor:
+        sampled_policies = random.sample(list(self.policies), self.num_sampled_nets)
+
+        # Each policy uses its own target network(s) to calculate next_obs_val
+        next_q_vals = torch.stack([p.next_obs_val(next_obs) for p in sampled_policies])
+        min_next_q_vals, _ = torch.min(next_q_vals, dim=0)
+        return min_next_q_vals
+
+    def calc_loss(
+        self,
+        obs: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        done_flags: torch.Tensor,
+        next_obs: torch.Tensor,
+        extra_info: dict,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Calculate shared next_obs_val using min of random subset of target policies
+        next_obs_val = self.get_next_obs_val(next_obs)
+
+        total_loss = torch.tensor(0.0, device=obs.device)
+        all_tdes = []
+        for policy in self.policies:
+            # Each sub-policy calculates its loss using the shared target value
+            loss, tde = policy.calc_loss(
+                obs,
+                actions,
+                rewards,
+                done_flags,
+                next_obs,
+                extra_info,
+                next_obs_val=next_obs_val,
+            )
+            total_loss += loss
+            all_tdes.append(tde)
+
+        # For PER, we need a single TDE. We can average them.
+        mean_abs_tde = torch.stack(all_tdes).mean(dim=0)
+
+        return total_loss / self.size, mean_abs_tde

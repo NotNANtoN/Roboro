@@ -8,7 +8,8 @@ env_steps: 10000
 
 trainer:
 #  weights_summary: "full"
-  gradient_clip_val: 1.0  # 0 means don't clip
+  gradient_clip_val: 20.0  # 0 means don't clip
+  gradient_clip_algorithm: "norm"
   precision: 32  # 16 if args.gpus else 32 - atm precision 16 makes the code slower, not faster
 
 opt:
@@ -33,9 +34,13 @@ buffer:
   per: 0
 
 agent:
+  int_ens: 1
   # policy selection
   policy:
     gamma: 0.99
+    ensemble:
+      size: 5
+      num_sampled_nets: 2
     net:
       width: 256
       activation_fn: "mish"  # from td-mpc2

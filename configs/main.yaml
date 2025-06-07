@@ -70,6 +70,9 @@ agent:
   target_net_polyak_val: 0.99
   policy:
     gamma: 0.99
+    ensemble: # For EnsembleQ
+      size: 1
+      num_sampled_nets: 1
     net:
       dueling: 0
       noisy_layers: 0
