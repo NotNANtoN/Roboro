@@ -59,7 +59,7 @@ class TargetNetwork(nn.Module):
 
     def _polyak_update(self) -> None:
         for tp, sp in zip(self.target.parameters(), self.source.parameters(), strict=True):
-            tp.data.lerp_(sp.data, 1.0 - self.tau)
+            tp.data.lerp_(sp.data, self.tau)
 
     def _hard_update(self) -> None:
         self.target.load_state_dict(self.source.state_dict())

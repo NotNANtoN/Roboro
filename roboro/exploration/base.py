@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
 
-if TYPE_CHECKING:
-    from roboro.core.types import Batch
+from roboro.core.types import Batch
 
 
 class BaseExploration(nn.Module, ABC):

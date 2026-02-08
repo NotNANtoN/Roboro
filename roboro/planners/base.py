@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import torch
+import torch
 
-    from roboro.dynamics.base import BaseDynamics
+from roboro.dynamics.base import BaseDynamics
 
 
 class BasePlanner(ABC):
