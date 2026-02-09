@@ -5,13 +5,11 @@ This is a *recipe*: it wires together orthogonal components based on
 fully determined by the config.  Use presets from ``roboro.presets`` for named
 algorithms::
 
-    from roboro.presets import DDPG, SAC
+    from roboro.presets import DDPG, TD3, SAC
     from roboro.algorithms.continuous_ac import train_continuous_ac
 
     result = train_continuous_ac("Pendulum-v1", cfg=SAC)
 """
-
-from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
@@ -20,7 +18,6 @@ import torch
 from roboro.actors.base import BaseActor
 from roboro.core.config import ContinuousActorCriticCfg
 from roboro.core.device import maybe_compile
-from roboro.critics.base import BaseQCritic
 from roboro.critics.q import ContinuousQCritic, TwinQCritic
 from roboro.critics.target import TargetNetwork
 from roboro.data.replay_buffer import ReplayBuffer
@@ -125,13 +122,12 @@ def _build_update(
             target_entropy=cfg.target_entropy,
         )
 
-    # DDPG update — requires DeterministicActor + actor target
+    # DDPG / TD3 update — requires DeterministicActor + actor target
     from roboro.actors.deterministic import DeterministicActor
     from roboro.updates.ddpg import DDPGUpdate
 
     assert isinstance(actor, DeterministicActor)
-    assert actor_target is not None, "DDPG requires an actor target network."
-    assert isinstance(critic, BaseQCritic), "DDPG requires a single Q-critic (not TwinQCritic)."
+    assert actor_target is not None, "DDPG/TD3 requires an actor target network."
     return DDPGUpdate(
         actor=actor,
         actor_target=actor_target,
@@ -140,6 +136,9 @@ def _build_update(
         actor_lr=cfg.actor_lr,
         critic_lr=cfg.critic_lr,
         gamma=cfg.gamma,
+        actor_delay=cfg.actor_delay,
+        target_noise=cfg.target_noise,
+        target_noise_clip=cfg.target_noise_clip,
     )
 
 
@@ -160,6 +159,12 @@ def train_continuous_ac(
     """
     if cfg is None:
         cfg = ContinuousActorCriticCfg()
+
+    # Seed all RNGs before any model creation (weight init must be deterministic)
+    from roboro.core.seed import set_seed
+
+    set_seed(cfg.train.seed)
+
     device = torch.device(cfg.train.device)
 
     env = gym.make(env_id)
@@ -192,6 +197,7 @@ def train_continuous_ac(
         capacity=cfg.buffer.capacity,
         obs_shape=(obs_dim,),
         action_shape=(action_dim,),
+        seed=cfg.train.seed,
     )
 
     update = _build_update(cfg, actor, critic, critic_target, actor_target)

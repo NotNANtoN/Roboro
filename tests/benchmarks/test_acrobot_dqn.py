@@ -17,8 +17,6 @@ Standalone with Hydra overrides::
     python tests/benchmarks/test_acrobot_dqn.py train.device=mps
 """
 
-from __future__ import annotations
-
 from dataclasses import replace
 from typing import Any
 

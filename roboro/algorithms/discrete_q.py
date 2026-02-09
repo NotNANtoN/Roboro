@@ -11,8 +11,6 @@ algorithms::
     result = train_discrete_q("CartPole-v1", cfg=DQN)
 """
 
-from __future__ import annotations
-
 import gymnasium as gym
 import torch
 
@@ -39,6 +37,12 @@ def train_discrete_q(
     """
     if cfg is None:
         cfg = DiscreteQCfg()
+
+    # Seed all RNGs before any model creation (weight init must be deterministic)
+    from roboro.core.seed import set_seed
+
+    set_seed(cfg.train.seed)
+
     device = torch.device(cfg.train.device)
 
     env = gym.make(env_id)
@@ -76,6 +80,7 @@ def train_discrete_q(
         capacity=cfg.buffer.capacity,
         obs_shape=(obs_dim,),
         action_shape=(),  # discrete: scalar actions
+        seed=cfg.train.seed,
     )
 
     update = DQNUpdate(

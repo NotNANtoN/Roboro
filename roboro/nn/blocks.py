@@ -1,7 +1,5 @@
 """Standard MLP building block — the *one* place layer construction lives."""
 
-from __future__ import annotations
-
 from typing import cast
 
 import torch

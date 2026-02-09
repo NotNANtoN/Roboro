@@ -17,8 +17,6 @@ To tweak a preset, use ``dataclasses.replace``::
     my_dqn = replace(DQN, lr=3e-4, double_q=True)
 """
 
-from __future__ import annotations
-
 from roboro.core.config import (
     BufferCfg,
     ContinuousActorCriticCfg,
@@ -165,21 +163,34 @@ SAC = ContinuousActorCriticCfg(
 Squashed Gaussian policy + clipped double Q + max-entropy Bellman backup + auto alpha-tuning.
 """
 
-# TD3 = ContinuousActorCriticCfg(
-#     actor_network=NetworkCfg(hidden_dim=256, n_layers=2, activation="relu"),
-#     critic_network=NetworkCfg(hidden_dim=256, n_layers=2, activation="relu"),
-#     target=TargetNetCfg(mode="polyak", tau=0.005),
-#     buffer=BufferCfg(capacity=100_000),
-#     train=TrainCfg(total_steps=50_000, batch_size=256),
-#     actor_lr=1e-3,
-#     critic_lr=1e-3,
-#     gamma=0.99,
-#     noise_std=0.1,
-#     twin_q=True,          # clipped double Q
-#     actor_delay=2,         # delayed actor update
-#     target_noise=0.2,      # target policy smoothing
-#     target_noise_clip=0.5,
-# )
-# """Fujimoto et al., 2018.
-# DDPG + clipped double Q + delayed actor update + target policy smoothing.
-# """
+TD3 = ContinuousActorCriticCfg(
+    # Separate network configs for actor and critic
+    actor_network=NetworkCfg(hidden_dim=256, n_layers=2, activation="relu", use_layer_norm=False),
+    critic_network=NetworkCfg(hidden_dim=256, n_layers=2, activation="relu", use_layer_norm=False),
+    # Target: Polyak averaging (soft update)
+    target=TargetNetCfg(mode="polyak", tau=0.005),
+    # Replay
+    buffer=BufferCfg(capacity=100_000),
+    # Training loop
+    train=TrainCfg(
+        total_steps=50_000,
+        warmup_steps=1_000,
+        batch_size=256,
+        eval_interval=5_000,
+        eval_episodes=10,
+    ),
+    # Learning
+    actor_lr=1e-3,
+    critic_lr=1e-3,
+    gamma=0.99,
+    noise_std=0.1,
+    # TD3-specific: deterministic policy + three extensions over DDPG
+    actor_type="deterministic",
+    twin_q=True,  # clipped double Q
+    actor_delay=2,  # delayed actor update
+    target_noise=0.2,  # target policy smoothing
+    target_noise_clip=0.5,
+)
+"""Fujimoto et al., 2018.
+DDPG + clipped double Q + delayed actor update + target policy smoothing.
+"""

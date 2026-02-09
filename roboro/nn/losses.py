@@ -8,8 +8,6 @@ Usage::
     loss = loss_fn(predicted_q, target_q)
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 import torch

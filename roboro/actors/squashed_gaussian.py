@@ -4,8 +4,6 @@ Outputs a tanh-squashed sample from a learned diagonal Gaussian.
 The reparameterization trick enables low-variance policy gradients.
 """
 
-from __future__ import annotations
-
 import torch
 from torch import nn
 from torch.distributions import Normal

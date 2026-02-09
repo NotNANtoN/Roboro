@@ -15,8 +15,6 @@ Standalone with Hydra overrides::
     python tests/benchmarks/test_pendulum_ddpg.py train.device=mps critic_lr=3e-4
 """
 
-from __future__ import annotations
-
 from dataclasses import replace
 from typing import Any
 

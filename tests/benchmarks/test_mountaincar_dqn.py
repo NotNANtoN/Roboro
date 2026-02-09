@@ -19,8 +19,6 @@ Standalone with Hydra overrides::
     python tests/benchmarks/test_mountaincar_dqn.py train.device=mps
 """
 
-from __future__ import annotations
-
 from dataclasses import replace
 from typing import Any
 

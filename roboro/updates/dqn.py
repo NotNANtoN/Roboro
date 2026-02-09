@@ -1,7 +1,5 @@
 """DQN update rule: classic Q-learning with target network."""
 
-from __future__ import annotations
-
 import torch
 from torch import nn, optim
 

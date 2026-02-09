@@ -8,8 +8,6 @@ Run::
     pytest tests/integration/test_smoke.py -v
 """
 
-from __future__ import annotations
-
 from dataclasses import replace
 from typing import Any
 
@@ -18,7 +16,7 @@ import pytest
 from roboro.algorithms.continuous_ac import train_continuous_ac
 from roboro.algorithms.discrete_q import train_discrete_q
 from roboro.core.config import ContinuousActorCriticCfg, DiscreteQCfg
-from roboro.presets import DDPG, DOUBLE_DQN, DQN, SAC
+from roboro.presets import DDPG, DOUBLE_DQN, DQN, SAC, TD3
 
 # ── shared config for speed ─────────────────────────────────────────────────
 
@@ -109,6 +107,8 @@ class TestContinuousACSmoke:
     def test_ddpg_reward_improves(self) -> None:
         """DDPG's later episodes should score better than the first ones."""
         cfg = _fast_train(DDPG)
+        # Bump LRs so DDPG picks up signal within the tiny 5k-step budget
+        cfg = replace(cfg, actor_lr=3e-3, critic_lr=3e-3)
         result = train_continuous_ac("Pendulum-v1", cfg=cfg)
         n = min(5, len(result.episode_rewards) // 3)
         if n < 2:
@@ -138,6 +138,23 @@ class TestContinuousACSmoke:
             abs(v) < 1e6 for v in losses
         ), f"Loss diverged: max={max(abs(v) for v in losses)}"
 
+    def test_td3_runs_and_evaluates(self) -> None:
+        """TD3 completes training and produces eval rewards."""
+        cfg = _fast_train(TD3)
+        result = train_continuous_ac("Pendulum-v1", cfg=cfg)
+        assert len(result.eval_rewards) >= 2
+        assert len(result.episode_rewards) > 0
+
+    def test_td3_loss_is_finite(self) -> None:
+        """TD3 produces finite loss values (no NaN / Inf divergence)."""
+        cfg = _fast_train(TD3)
+        result = train_continuous_ac("Pendulum-v1", cfg=cfg)
+        losses = [m["loss"] for m in result.metrics if "loss" in m]
+        assert len(losses) > 0, "No gradient steps happened"
+        assert all(
+            abs(v) < 1e6 for v in losses
+        ), f"Loss diverged: max={max(abs(v) for v in losses)}"
+
     def test_sac_alpha_tracked(self) -> None:
         """SAC metrics include the entropy coefficient alpha."""
         cfg = _fast_train(SAC)
@@ -145,3 +162,31 @@ class TestContinuousACSmoke:
         alphas = [m["alpha"] for m in result.metrics if "alpha" in m]
         assert len(alphas) > 0, "Alpha not tracked in metrics"
         assert all(a > 0 for a in alphas), "Alpha should be positive"
+
+
+# ── Reproducibility ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.integration
+class TestReproducibility:
+    """Verify that identical seeds produce identical results."""
+
+    def test_dqn_deterministic(self) -> None:
+        """Two DQN runs with the same seed should produce identical eval rewards."""
+        cfg = _fast_discrete(DQN)
+        cfg = replace(cfg, train=replace(cfg.train, seed=42))
+        r1 = train_discrete_q("CartPole-v1", cfg=cfg)
+        r2 = train_discrete_q("CartPole-v1", cfg=cfg)
+        assert (
+            r1.eval_rewards == r2.eval_rewards
+        ), f"Non-deterministic DQN: {r1.eval_rewards} != {r2.eval_rewards}"
+
+    def test_ddpg_deterministic(self) -> None:
+        """Two DDPG runs with the same seed should produce identical eval rewards."""
+        cfg = _fast_train(DDPG)
+        cfg = replace(cfg, train=replace(cfg.train, seed=42))
+        r1 = train_continuous_ac("Pendulum-v1", cfg=cfg)
+        r2 = train_continuous_ac("Pendulum-v1", cfg=cfg)
+        assert (
+            r1.eval_rewards == r2.eval_rewards
+        ), f"Non-deterministic DDPG: {r1.eval_rewards} != {r2.eval_rewards}"

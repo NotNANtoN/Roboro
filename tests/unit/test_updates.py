@@ -1,6 +1,4 @@
-"""Tests for update rules (DQN, Double DQN, DDPG, SAC)."""
-
-from __future__ import annotations
+"""Tests for update rules (DQN, Double DQN, DDPG, TD3, SAC)."""
 
 from typing import Any
 
@@ -148,6 +146,140 @@ class TestDDPGUpdate:
 
         # Loss should generally decrease (last few < first few)
         assert sum(losses[-5:]) / 5 < sum(losses[:5]) / 5
+
+
+class TestTD3Update:
+    """TD3 = DDPG + twin Q + delayed actor + target smoothing."""
+
+    def _build_td3(
+        self, obs_dim: int = 8, action_dim: int = 2, hidden_dim: int = 32, **kwargs: Any
+    ) -> tuple[DeterministicActor, TwinQCritic, TargetNetwork, TargetNetwork, DDPGUpdate]:
+        """Helper to build a minimal TD3 setup (DDPGUpdate with TD3 extensions)."""
+        actor = DeterministicActor(
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            hidden_dim=hidden_dim,
+            n_layers=2,
+        )
+        actor_target = TargetNetwork(actor, mode="polyak", tau=0.005)
+        q1 = ContinuousQCritic(feature_dim=obs_dim, action_dim=action_dim, hidden_dim=hidden_dim)
+        q2 = ContinuousQCritic(feature_dim=obs_dim, action_dim=action_dim, hidden_dim=hidden_dim)
+        critic = TwinQCritic(q1, q2)
+        critic_target = TargetNetwork(critic, mode="polyak", tau=0.005)
+
+        update = DDPGUpdate(
+            actor=actor,
+            actor_target=actor_target,
+            critic=critic,
+            critic_target=critic_target,
+            actor_lr=1e-3,
+            critic_lr=1e-3,
+            actor_delay=2,
+            target_noise=0.2,
+            target_noise_clip=0.5,
+            **kwargs,
+        )
+        return actor, critic, critic_target, actor_target, update
+
+    def test_update_runs(self) -> None:
+        obs_dim, action_dim = 8, 2
+        _, _, _, _, update = self._build_td3(obs_dim=obs_dim, action_dim=action_dim)
+        batch = _make_continuous_batch(obs_dim, action_dim=action_dim)
+        result = update.update(batch, step=1)
+        assert result.loss >= 0
+        assert "critic_loss" in result.metrics
+        assert "actor_loss" in result.metrics
+
+    def test_delayed_actor_update(self) -> None:
+        """Actor should only update on steps divisible by actor_delay."""
+        _, _, _, actor_target, update = self._build_td3()
+        batch = _make_continuous_batch(8, action_dim=2, batch_size=32)
+
+        # Capture actor params before any updates
+        actor_params_before = [p.clone() for p in update.actor.parameters()]
+        target_params_before = [p.clone() for p in actor_target.target.parameters()]
+
+        # Step 1: actor_delay=2, so actor should NOT update
+        result = update.update(batch, step=1)
+        assert result.metrics["actor_loss"] == 0.0
+        for before, after in zip(actor_params_before, update.actor.parameters(), strict=True):
+            assert torch.equal(before, after), "Actor should not update on odd steps"
+        for before, after in zip(
+            target_params_before, actor_target.target.parameters(), strict=True
+        ):
+            assert torch.equal(before, after), "Targets should not update on odd steps"
+
+        # Step 2: actor SHOULD update
+        result = update.update(batch, step=2)
+        assert result.metrics["actor_loss"] != 0.0
+        actor_changed = any(
+            not torch.equal(b, a)
+            for b, a in zip(actor_params_before, update.actor.parameters(), strict=True)
+        )
+        assert actor_changed, "Actor should update on even steps"
+
+    def test_twin_critic_loss(self) -> None:
+        """Critic loss should use both Q-networks (sum of two MSE terms)."""
+        obs_dim, action_dim = 8, 2
+        _, critic, _, _, update = self._build_td3(obs_dim=obs_dim, action_dim=action_dim)
+        batch = _make_continuous_batch(obs_dim, action_dim=action_dim, batch_size=32)
+
+        update.update(batch, step=2)
+        # Both Q-networks should have gradients (params changed)
+        q1_has_grad = any(
+            p.grad is not None and p.grad.abs().sum() > 0 for p in critic.q1.parameters()
+        )
+        q2_has_grad = any(
+            p.grad is not None and p.grad.abs().sum() > 0 for p in critic.q2.parameters()
+        )
+        assert q1_has_grad, "Q1 should receive gradients"
+        assert q2_has_grad, "Q2 should receive gradients"
+
+    def test_critic_improves(self) -> None:
+        """Critic loss should decrease on a simple constant-reward signal."""
+        obs_dim, action_dim = 4, 1
+        _, _, _, _, update = self._build_td3(obs_dim=obs_dim, action_dim=action_dim, hidden_dim=32)
+
+        batch = _make_continuous_batch(obs_dim, action_dim=action_dim, batch_size=64)
+        batch.rewards = torch.ones(64)
+        batch.dones = torch.ones(64, dtype=torch.bool)
+
+        losses = []
+        for i in range(1, 31):
+            result = update.update(batch, step=i)
+            losses.append(result.metrics["critic_loss"])
+
+        assert sum(losses[-5:]) / 5 < sum(losses[:5]) / 5
+
+    def test_all_metrics_finite(self) -> None:
+        """All reported metrics should be finite (no NaN / Inf)."""
+        _, _, _, _, update = self._build_td3()
+        batch = _make_continuous_batch(8, action_dim=2, batch_size=32)
+
+        for i in range(1, 6):
+            result = update.update(batch, step=i)
+            for key, val in result.metrics.items():
+                assert abs(val) < 1e8, f"Metric '{key}' diverged: {val}"
+
+    def test_target_updates_on_delay(self) -> None:
+        """Target networks should only change on actor-update steps."""
+        _, _, critic_target, _, update = self._build_td3()
+        batch = _make_continuous_batch(8, action_dim=2)
+
+        initial_params = [p.clone() for p in critic_target.target.parameters()]
+
+        # Step 1: targets should NOT update
+        update.update(batch, step=1)
+        for ip, cp in zip(initial_params, critic_target.target.parameters(), strict=True):
+            assert torch.equal(ip, cp), "Targets should not update on non-delay steps"
+
+        # Step 2: targets SHOULD update
+        update.update(batch, step=2)
+        any_changed = any(
+            not torch.equal(ip, cp)
+            for ip, cp in zip(initial_params, critic_target.target.parameters(), strict=True)
+        )
+        assert any_changed, "Targets should update on delay steps"
 
 
 class TestSACUpdate:

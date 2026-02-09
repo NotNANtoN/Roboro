@@ -1,7 +1,5 @@
 """Concrete Q-critic implementations: discrete and continuous."""
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 import torch

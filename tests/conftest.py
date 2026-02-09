@@ -1,7 +1,5 @@
 """Shared pytest fixtures and CLI options for the Roboro test suite."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

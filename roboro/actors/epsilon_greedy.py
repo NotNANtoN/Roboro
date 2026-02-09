@@ -1,7 +1,5 @@
 """Epsilon-greedy actor wrapping a discrete Q-critic."""
 
-from __future__ import annotations
-
 from typing import cast
 
 import torch

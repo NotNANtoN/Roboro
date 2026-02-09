@@ -8,15 +8,40 @@ A modular reinforcement learning library that decomposes algorithms into their t
 
 Algorithm names are aliases for combinations of orthogonal techniques. Roboro makes this explicit:
 
+### Discrete Q-learning family
+
+| Technique | DQN | Double DQN | Rainbow |
+|---|---|---|---|
+| Replay buffer | uniform | uniform | PER |
+| Q-network | single | single | dueling + distributional (C51) |
+| Exploration | ε-greedy | ε-greedy | NoisyNets |
+| Target network | hard copy | hard copy | hard copy |
+| Action selection | argmax Q | argmax Q (online selects, target evaluates) | argmax Q |
+| N-step returns | — | — | ✓ |
+
+### Continuous actor-critic family
+
+| Technique | DDPG | TD3 | SAC | CrossQ |
+|---|---|---|---|---|
+| Actor | deterministic | deterministic | squashed Gaussian | squashed Gaussian |
+| Q-critics | single | **twin** (clipped double) | twin | twin |
+| Exploration | Gaussian noise | Gaussian noise | **entropy-driven** | entropy-driven |
+| Target networks | Polyak (actor + critic) | Polyak (actor + critic) | Polyak (critic only) | **none** (BatchNorm) |
+| Delayed actor update | — | **every 2 steps** | — | — |
+| Target policy smoothing | — | **clipped noise** | — | — |
+| Entropy tuning | — | — | **auto α** | auto α |
+
+### Offline RL family (planned)
+
+| Technique | CQL | IQL | TD3+BC |
+|---|---|---|---|
+| Base | SAC | separate V + advantage | TD3 |
+| Offline constraint | conservative Q penalty | expectile regression | BC regularization |
+
+### Model-based family (planned)
+
 | Algorithm | Decomposition |
 |-----------|--------------|
-| **DQN** | Replay buffer + Q-network + ε-greedy + hard target net |
-| **Rainbow** | DQN + PER + N-step + Dueling + NoisyNets + C51 + Double Q |
-| **SAC** | Replay + clipped double Q + squashed Gaussian policy + max-entropy Bellman backup + auto α-tuning |
-| **CrossQ** | SAC − target networks + BatchNorm in Q-networks |
-| **TD3** | Replay + clipped double Q + deterministic policy + delayed actor update + target policy smoothing |
-| **CQL** | SAC + conservative Q regularization (offline) |
-| **IQL** | Expectile regression on V + advantage-weighted actor (offline) |
 | **TD-MPC2** | Deterministic latent dynamics (joint embedding) + latent reward/value heads + TD(λ) in latent space + MPPI planning |
 | **EfficientZero** | Latent dynamics (consistency loss) + latent reward/value + MCTS planning + self-supervised temporal consistency + learned value prefix |
 | **Dreamer-v3** | Stochastic latent dynamics (RSSM) + observation reconstruction + latent reward/value + actor-critic in imagination |
@@ -36,7 +61,7 @@ roboro/
 ├── envs/           Environment wrappers and utilities
 ├── algorithms/     Pre-wired recipes — each is a config composing the above
 ├── training/       Training loop, evaluation, logging (W&B)
-└── core/           Shared types (Batch) and registry
+└── core/           Shared types (Batch), seeding, device utilities
 ```
 
 ### Key Design Decisions
@@ -80,29 +105,22 @@ pytest --cov=roboro --cov-report=term-missing
 pytest -m "not slow and not benchmark"
 ```
 
-## Roadmap
+## Status
 
-- [x] Core abstractions (Batch, BaseEncoder, BaseCritic, BaseActor, BaseUpdate)
-- [x] MLP encoder, discrete/continuous Q-critics, twin Q, target networks
-- [x] Replay buffer with uniform sampling
-- [x] Test infrastructure (pytest, ruff, mypy, pre-commit)
-- [x] **SAC** — first complete algorithm (continuous control)
-- [ ] **DQN** — port from v1 onto new abstractions
-- [ ] **Offline RL** — CQL, IQL, TD3+BC with D4RL datasets
-- [ ] **TD-MPC2** — deterministic dynamics + MPPI planner
-- [ ] **Dreamer-v3** — RSSM dynamics + imagination training
-- [ ] **Exploration modules** — prediction error, ensemble disagreement
-- [ ] **Performance benchmarks** — regression tests against known scores
-- [ ] **Documentation site** — algorithm decomposition tables, tutorials
+**Implemented:** DQN, Double DQN, DDPG, TD3, SAC — with unit tests, smoke tests, initial benchmarks, and deterministic seeding.
+
+**Next up:** monitoring/evaluation infrastructure, full performance benchmarks, offline RL.
+
+See **[ROADMAP.md](ROADMAP.md)** for the full task list and priorities.
 
 ## Testing Philosophy
 
 Inspired by Stable-Baselines3:
 
 - **Unit tests**: every module produces correct output shapes, gradients flow
-- **Smoke tests**: every algorithm config runs for 100 steps without crashing
-- **Correctness tests**: SAC on Pendulum converges to ≥ −200 within 50k steps
-- **Regression benchmarks**: tracked results on HalfCheetah, Ant, FetchReach
+- **Smoke tests**: every algorithm config runs for ~5k steps without crashing
+- **Performance benchmarks**: DQN on CartPole, SAC/DDPG/TD3 on Pendulum, etc.
+- **Reproducibility tests**: identical seeds produce identical results
 
 ## License
 

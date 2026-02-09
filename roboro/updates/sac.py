@@ -6,8 +6,6 @@ Implements the Soft Actor-Critic algorithm (Haarnoja et al., 2018):
   * Alpha loss:   -alpha * (log pi(a|s) + H_target)   (when ``learnable_alpha=True``)
 """
 
-from __future__ import annotations
-
 import torch
 from torch import nn, optim
 

@@ -1,7 +1,5 @@
 """Minimal off-policy training loop — no framework, just a function."""
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,11 +31,14 @@ def evaluate(
     actor: BaseActor,
     n_episodes: int = 5,
     device: torch.device | str = "cpu",
+    seed: int | None = None,
 ) -> float:
     """Run *n_episodes* greedy rollouts, return mean reward."""
     rewards = []
-    for _ in range(n_episodes):
-        obs, _ = env.reset()
+    for ep in range(n_episodes):
+        # Seed each eval episode deterministically (if a base seed is given)
+        ep_seed = seed + ep if seed is not None else None
+        obs, _ = env.reset(seed=ep_seed)
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
         total = 0.0
         done = False
@@ -69,10 +70,13 @@ def train_off_policy(
     3. Periodically evaluate the actor greedily.
 
     Supports optional bfloat16 autocast via ``cfg.use_amp`` (CUDA / MPS only).
+
+    Note: callers should call ``set_seed(cfg.seed)`` **before** creating models
+    so that weight initialisation is also reproducible.
     """
     result = TrainResult()
 
-    obs, _ = env.reset()
+    obs, _ = env.reset(seed=cfg.seed)
     obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
     episode_reward = 0.0
     last_loss = float("nan")
@@ -130,7 +134,11 @@ def train_off_policy(
             if step % cfg.eval_interval == 0:
                 eval_env = gym.make(env.spec.id) if env.spec else env  # type: ignore[union-attr]
                 mean_reward = evaluate(
-                    eval_env, actor, n_episodes=cfg.eval_episodes, device=device
+                    eval_env,
+                    actor,
+                    n_episodes=cfg.eval_episodes,
+                    device=device,
+                    seed=cfg.seed,
                 )
                 result.eval_rewards.append(mean_reward)
                 tracker.log_eval(mean_reward)

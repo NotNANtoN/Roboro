@@ -25,8 +25,6 @@ Example YAML (``configs/algorithm/dqn.yaml``)::
     td_loss: huber
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 # ── shared sub-configs ───────────────────────────────────────────────────────

@@ -4,10 +4,8 @@ Every component speaks the same language: observations, actions, rewards
 are always represented using these types.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 
 import torch
 
@@ -43,7 +41,7 @@ class Batch:
     def batch_size(self) -> int:
         return self.obs.shape[0]
 
-    def to(self, device: torch.device | str) -> Batch:
+    def to(self, device: torch.device | str) -> Self:
         """Move every tensor field to *device*, return self for chaining."""
         for f in self.__dataclass_fields__:
             val = getattr(self, f)

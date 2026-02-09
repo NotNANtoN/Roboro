@@ -18,8 +18,6 @@ Standalone with Hydra overrides::
     python tests/benchmarks/test_cartpole_dqn.py train.device=mps lr=5e-4
 """
 
-from __future__ import annotations
-
 from dataclasses import replace
 from typing import Any
 

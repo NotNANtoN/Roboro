@@ -5,8 +5,6 @@ for non-terminal transitions.  We only store ``obs`` and keep a sparse
 dict of terminal observations, cutting observation memory nearly in half.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import torch
 
@@ -31,6 +29,7 @@ class ReplayBuffer:
         obs_shape: shape of a single observation, e.g. ``(4,)`` or ``(84, 84, 3)``.
         action_shape: shape of a single action.
             ``()`` for discrete (scalar), ``(action_dim,)`` for continuous.
+        seed: optional RNG seed for reproducible sampling.
     """
 
     def __init__(
@@ -38,6 +37,7 @@ class ReplayBuffer:
         capacity: int,
         obs_shape: tuple[int, ...],
         action_shape: tuple[int, ...] = (),
+        seed: int | None = None,
     ) -> None:
         self.capacity = capacity
         self.obs_shape = obs_shape
@@ -53,7 +53,7 @@ class ReplayBuffer:
 
         self._pos = 0  # next write position
         self._size = 0  # current number of stored transitions
-        self._rng = np.random.default_rng()  # fast, modern NumPy RNG
+        self._rng = np.random.default_rng(seed)  # fast, modern NumPy RNG
 
     # ── public API ──────────────────────────────────────────────────────────
 

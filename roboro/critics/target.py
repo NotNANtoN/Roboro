@@ -1,7 +1,5 @@
 """Target network utilities — composable, not baked into critics."""
 
-from __future__ import annotations
-
 import copy
 from typing import cast
 

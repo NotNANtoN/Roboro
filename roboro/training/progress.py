@@ -1,6 +1,6 @@
 """Progress tracking — keeps the training loop clean."""
 
-from __future__ import annotations
+from typing import Self
 
 from tqdm import tqdm
 
@@ -97,7 +97,7 @@ class ProgressTracker:
 
     # ── context manager ──────────────────────────────────────────────────────
 
-    def __enter__(self) -> ProgressTracker:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
