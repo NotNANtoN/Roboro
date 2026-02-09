@@ -1,21 +1,20 @@
-"""Performance benchmarks: DQN on CartPole-v1.
+"""Performance benchmarks: DQN on Acrobot-v1.
 
-CleanRL reference (3 seeds, 500k steps): 488.69 +/- 16.11
+CleanRL reference (3 seeds, 500k steps): -91.54 +/- 7.20
 
 Two tiers:
-  * **Fast** (~50k steps): reward clearly above random (> 100).
-  * **Slow** (~500k steps): near-solved performance (>= 475).
+  * **Fast** (~50k steps): reward clearly above random (> -300).
+  * **Slow** (~500k steps): converges to >= -100.
 
 Via pytest::
 
-    pytest -m "benchmark and not slow" -k cartpole -s   # fast only
-    pytest -m benchmark -k cartpole -s                   # both tiers
-    pytest -m benchmark -k cartpole -s --device mps      # on GPU
+    pytest -m "benchmark and not slow" -k acrobot -s
+    pytest -m benchmark -k acrobot -s
 
 Standalone with Hydra overrides::
 
-    python tests/benchmarks/test_cartpole_dqn.py
-    python tests/benchmarks/test_cartpole_dqn.py train.device=mps lr=5e-4
+    python tests/benchmarks/test_acrobot_dqn.py
+    python tests/benchmarks/test_acrobot_dqn.py train.device=mps
 """
 
 from __future__ import annotations
@@ -30,10 +29,10 @@ from roboro.training.trainer import TrainResult
 # ── shared logic ─────────────────────────────────────────────────────────────
 
 
-def _run_dqn_cartpole(cfg: Any) -> TrainResult:
-    """Run DQN on CartPole-v1.  Accepts dataclass or Hydra DictConfig."""
+def _run_dqn_acrobot(cfg: Any) -> TrainResult:
+    """Run DQN on Acrobot-v1.  Accepts dataclass or Hydra DictConfig."""
     print(f"Device: {cfg.train.device}  compile={cfg.train.compile}  amp={cfg.train.use_amp}")
-    result = train_discrete_q("CartPole-v1", cfg=cfg)
+    result = train_discrete_q("Acrobot-v1", cfg=cfg)
     print(f"\nEval rewards: {[f'{r:.0f}' for r in result.eval_rewards]}")
     if result.eval_rewards:
         print(f"Best eval: {max(result.eval_rewards):.0f}")
@@ -46,10 +45,10 @@ try:
     import pytest
 
     @pytest.mark.benchmark
-    def test_dqn_cartpole_improves(train_overrides: dict[str, Any]) -> None:
-        """DQN should clearly outperform random (>100) within 50k steps.
+    def test_dqn_acrobot_improves(train_overrides: dict[str, Any]) -> None:
+        """DQN should clearly outperform random (> -300) within 50k steps.
 
-        Random CartPole scores ~20-30.
+        Random Acrobot scores ~-500.
         """
         cfg = replace(
             DQN,
@@ -63,29 +62,29 @@ try:
             ),
             epsilon_decay_steps=25_000,
         )
-        result = _run_dqn_cartpole(cfg)
+        result = _run_dqn_acrobot(cfg)
 
         assert len(result.eval_rewards) >= 2, "Need at least 2 evals"
         best_eval = max(result.eval_rewards)
-        assert best_eval > 100, (
-            f"DQN didn't improve beyond random on CartPole-v1 in 50k steps. "
-            f"Best eval: {best_eval:.0f} (need >100), all evals: {result.eval_rewards}"
+        assert best_eval > -300, (
+            f"DQN didn't improve beyond random on Acrobot-v1 in 50k steps. "
+            f"Best eval: {best_eval:.0f} (need > -300), all evals: {result.eval_rewards}"
         )
 
     @pytest.mark.benchmark
     @pytest.mark.slow
-    def test_dqn_cartpole_solves(train_overrides: dict[str, Any]) -> None:
-        """DQN should solve CartPole-v1 (>= 475 avg reward) within 500k steps.
+    def test_dqn_acrobot_solves(train_overrides: dict[str, Any]) -> None:
+        """DQN should reach >= -100 on Acrobot-v1 within 500k steps.
 
-        CleanRL reference: 488.69 +/- 16.11
+        CleanRL reference: -91.54 +/- 7.20
         """
         cfg = replace(DQN, train=replace(DQN.train, **train_overrides))
-        result = _run_dqn_cartpole(cfg)
+        result = _run_dqn_acrobot(cfg)
 
         assert len(result.eval_rewards) > 0, "No evaluation was performed"
         best_eval = max(result.eval_rewards)
-        assert best_eval >= 475, (
-            f"DQN failed to solve CartPole-v1 (need >= 475). "
+        assert best_eval >= -100, (
+            f"DQN failed on Acrobot-v1 (need >= -100). "
             f"Best eval: {best_eval:.1f}, all evals: {result.eval_rewards}"
         )
 
@@ -106,6 +105,6 @@ if __name__ == "__main__":
 
     @hydra.main(config_name="config", version_base=None, config_path=None)
     def main(cfg: DiscreteQCfg) -> None:
-        _run_dqn_cartpole(cfg)
+        _run_dqn_acrobot(cfg)
 
     main()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import torch
 from torch import nn
 
@@ -29,7 +31,7 @@ class DiscreteQCritic(BaseQCritic):
         feature_dim: int,
         n_actions: int,
         trunk: nn.Module | None = None,
-        **kwargs: int | str | bool,
+        **kwargs: Any,
     ) -> None:
         super().__init__()
         self.n_actions = n_actions
@@ -39,10 +41,12 @@ class DiscreteQCritic(BaseQCritic):
             self.trunk = MLPBlock(in_dim=feature_dim, out_dim=n_actions, **kwargs)
 
     def forward(self, obs: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
-        q_values = self.trunk(obs)  # (B, n_actions)
+        q_values = cast(torch.Tensor, self.trunk(obs))  # (B, n_actions)
         if actions is not None:
             # Gather Q-values for the specified actions
-            return q_values.gather(1, actions.long().unsqueeze(-1)).squeeze(-1)  # (B,)
+            return cast(
+                torch.Tensor, q_values.gather(1, actions.long().unsqueeze(-1)).squeeze(-1)
+            )  # (B,)
         return q_values
 
 
@@ -65,7 +69,7 @@ class ContinuousQCritic(BaseQCritic):
         feature_dim: int,
         action_dim: int,
         trunk: nn.Module | None = None,
-        **kwargs: int | str | bool,
+        **kwargs: Any,
     ) -> None:
         super().__init__()
         if trunk is not None:
@@ -77,7 +81,7 @@ class ContinuousQCritic(BaseQCritic):
         if actions is None:
             raise ValueError("ContinuousQCritic requires explicit actions.")
         x = torch.cat([obs, actions], dim=-1)
-        return self.trunk(x).squeeze(-1)  # (B,)
+        return cast(torch.Tensor, self.trunk(x).squeeze(-1))  # (B,)
 
 
 class TwinQCritic(nn.Module):
@@ -94,8 +98,8 @@ class TwinQCritic(nn.Module):
 
     def forward(self, obs: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
         """Return the element-wise minimum of the two Q-networks."""
-        q1_val = self.q1(obs, actions)
-        q2_val = self.q2(obs, actions)
+        q1_val = cast(torch.Tensor, self.q1(obs, actions))
+        q2_val = cast(torch.Tensor, self.q2(obs, actions))
         return torch.min(q1_val, q2_val)
 
     def both(

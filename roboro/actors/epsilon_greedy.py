@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 
 from roboro.actors.base import BaseActor
@@ -39,7 +41,7 @@ class EpsilonGreedyActor(BaseActor):
         Returns:
             ``(B,)`` integer action indices.
         """
-        q_values = self.q_critic(obs)  # (B, n_actions)
+        q_values = cast(torch.Tensor, self.q_critic(obs))  # (B, n_actions)
         if deterministic or self.epsilon <= 0.0:
             return q_values.argmax(dim=-1)
 

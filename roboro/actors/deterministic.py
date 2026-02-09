@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from torch import nn
 
@@ -26,6 +28,9 @@ class DeterministicActor(BaseActor):
         **kwargs: forwarded to ``MLPBlock``.
     """
 
+    action_low: torch.Tensor
+    action_high: torch.Tensor
+
     def __init__(
         self,
         obs_dim: int,
@@ -34,7 +39,7 @@ class DeterministicActor(BaseActor):
         action_high: float = 1.0,
         noise_std: float = 0.1,
         trunk: nn.Module | None = None,
-        **kwargs: int | str | bool,
+        **kwargs: Any,
     ) -> None:
         super().__init__()
         self.action_dim = action_dim

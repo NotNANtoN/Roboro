@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import torch
 from torch import nn
 
@@ -29,7 +31,7 @@ class MLPEncoder(BaseEncoder):
         obs_dim: int,
         feature_dim: int = 256,
         trunk: nn.Module | None = None,
-        **kwargs: int | str | bool,
+        **kwargs: Any,
     ) -> None:
         super().__init__()
         self._feature_dim = feature_dim
@@ -47,4 +49,4 @@ class MLPEncoder(BaseEncoder):
         return self._feature_dim
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.trunk(obs)
+        return cast(torch.Tensor, self.trunk(obs))

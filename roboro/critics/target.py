@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from typing import cast
 
 import torch
 from torch import nn
@@ -47,7 +48,7 @@ class TargetNetwork(nn.Module):
     def forward(self, *args: torch.Tensor, **kwargs: torch.Tensor) -> torch.Tensor:
         """Forward pass through the **target** network (no grad)."""
         with torch.no_grad():
-            return self.target(*args, **kwargs)
+            return cast(torch.Tensor, self.target(*args, **kwargs))
 
     def update(self) -> None:
         """Update the target toward the source."""

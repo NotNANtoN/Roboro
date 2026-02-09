@@ -10,8 +10,10 @@ import gymnasium as gym
 import torch
 
 from roboro.actors.base import BaseActor
+from roboro.core.config import TrainCfg
 from roboro.core.types import Batch
 from roboro.data.replay_buffer import ReplayBuffer
+from roboro.training.progress import ProgressTracker
 from roboro.updates.base import BaseUpdate
 
 logger = logging.getLogger(__name__)
@@ -42,10 +44,9 @@ def evaluate(
         while not done:
             action = actor.act(obs_t, deterministic=True)
             act_np = action.squeeze(0).cpu().numpy()
-            # Handle discrete actions (scalar tensor → int)
-            if act_np.ndim == 0:
-                act_np = int(act_np)
-            obs, reward, terminated, truncated, _ = env.step(act_np)
+            # Handle discrete actions (scalar tensor -> int)
+            act_np_env = int(act_np) if act_np.ndim == 0 else act_np
+            obs, reward, terminated, truncated, _ = env.step(act_np_env)
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             total += float(reward)
             done = terminated or truncated
@@ -58,13 +59,8 @@ def train_off_policy(
     actor: BaseActor,
     update: BaseUpdate,
     buffer: ReplayBuffer,
-    total_steps: int,
-    batch_size: int = 256,
-    warmup_steps: int = 1000,
-    eval_interval: int = 2000,
-    eval_episodes: int = 5,
+    cfg: TrainCfg,
     device: torch.device | str = "cpu",
-    log_interval: int = 500,
 ) -> TrainResult:
     """Generic off-policy training loop.
 
@@ -72,65 +68,76 @@ def train_off_policy(
     2. After ``warmup_steps``, sample a batch and call ``update.update()``.
     3. Periodically evaluate the actor greedily.
 
-    Works for both DQN (discrete) and DDPG (continuous).
+    Supports optional bfloat16 autocast via ``cfg.use_amp`` (CUDA / MPS only).
     """
     result = TrainResult()
 
     obs, _ = env.reset()
     obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
     episode_reward = 0.0
+    last_loss = float("nan")
 
-    for step in range(1, total_steps + 1):
-        # ── act ─────────────────────────────────────────────────────────
-        action = actor.act(obs_t)
-        act_np = action.squeeze(0).cpu().numpy()
-        # Handle discrete actions
-        if act_np.ndim == 0:
-            act_np = int(act_np)
+    # AMP: only enable on accelerators, no-op on CPU
+    device_type = str(device).split(":")[0]
+    amp_enabled = cfg.use_amp and device_type != "cpu"
 
-        next_obs, reward, terminated, truncated, _ = env.step(act_np)
-        done = terminated or truncated
+    with ProgressTracker(
+        cfg.total_steps, show=cfg.show_progress, log_interval=cfg.log_interval
+    ) as tracker:
+        for step in range(1, cfg.total_steps + 1):
+            # ── act ─────────────────────────────────────────────────────
+            action = actor.act(obs_t)
+            act_np = action.squeeze(0).cpu().numpy()
+            act_np_env = int(act_np) if act_np.ndim == 0 else act_np
 
-        # Store as flat tensors
-        buffer.add(
-            obs=torch.as_tensor(obs, dtype=torch.float32),
-            action=action.squeeze(0).cpu().float(),
-            reward=float(reward),
-            next_obs=torch.as_tensor(next_obs, dtype=torch.float32),
-            done=terminated,  # only true termination, not truncation
-        )
+            next_obs, reward, terminated, truncated, _ = env.step(act_np_env)
+            done = terminated or truncated
 
-        obs = next_obs
-        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        episode_reward += float(reward)
+            buffer.add(
+                obs=obs,
+                action=act_np,
+                reward=float(reward),
+                next_obs=next_obs,
+                done=terminated,  # only true termination, not truncation
+            )
 
-        if done:
-            result.episode_rewards.append(episode_reward)
-            obs, _ = env.reset()
+            obs = next_obs
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-            episode_reward = 0.0
+            episode_reward += float(reward)
 
-        # ── learn ───────────────────────────────────────────────────────
-        if step >= warmup_steps and len(buffer) >= batch_size:
-            batch: Batch = buffer.sample(batch_size).to(device)
-            update_result = update.update(batch, step)
-            result.metrics.append({"step": step, **update_result.metrics})
+            if done:
+                result.episode_rewards.append(episode_reward)
+                tracker.log_episode(episode_reward)
+                obs, _ = env.reset()
+                obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+                episode_reward = 0.0
 
-            if step % log_interval == 0:
-                logger.info(
-                    "step=%d  loss=%.4f  %s",
-                    step,
-                    update_result.loss,
-                    {k: f"{v:.3f}" for k, v in update_result.metrics.items()},
+            # ── learn ───────────────────────────────────────────────────
+            if (
+                step >= cfg.warmup_steps
+                and len(buffer) >= cfg.batch_size
+                and step % cfg.train_freq == 0
+            ):
+                batch: Batch = buffer.sample(cfg.batch_size).to(device)
+                with torch.autocast(device_type, dtype=torch.bfloat16, enabled=amp_enabled):
+                    update_result = update.update(batch, step)
+                last_loss = update_result.loss
+                result.metrics.append(
+                    {"step": step, "loss": update_result.loss, **update_result.metrics}
                 )
 
-        # ── evaluate ────────────────────────────────────────────────────
-        if step % eval_interval == 0:
-            eval_env = gym.make(env.spec.id) if env.spec else env  # type: ignore[union-attr]
-            mean_reward = evaluate(eval_env, actor, n_episodes=eval_episodes, device=device)
-            result.eval_rewards.append(mean_reward)
-            if env.spec:
-                eval_env.close()
-            logger.info("step=%d  eval_reward=%.2f", step, mean_reward)
+            # ── evaluate ────────────────────────────────────────────────
+            if step % cfg.eval_interval == 0:
+                eval_env = gym.make(env.spec.id) if env.spec else env  # type: ignore[union-attr]
+                mean_reward = evaluate(
+                    eval_env, actor, n_episodes=cfg.eval_episodes, device=device
+                )
+                result.eval_rewards.append(mean_reward)
+                tracker.log_eval(mean_reward)
+                if env.spec:
+                    eval_env.close()
+
+            # ── progress ────────────────────────────────────────────────
+            tracker.step(step, loss=last_loss, actor=actor, buf_size=len(buffer))
 
     return result

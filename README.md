@@ -86,7 +86,7 @@ pytest -m "not slow and not benchmark"
 - [x] MLP encoder, discrete/continuous Q-critics, twin Q, target networks
 - [x] Replay buffer with uniform sampling
 - [x] Test infrastructure (pytest, ruff, mypy, pre-commit)
-- [ ] **SAC** — first complete algorithm (continuous control)
+- [x] **SAC** — first complete algorithm (continuous control)
 - [ ] **DQN** — port from v1 onto new abstractions
 - [ ] **Offline RL** — CQL, IQL, TD3+BC with D4RL datasets
 - [ ] **TD-MPC2** — deterministic dynamics + MPPI planner

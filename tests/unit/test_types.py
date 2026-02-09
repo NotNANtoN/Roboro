@@ -6,7 +6,7 @@ from roboro.core.types import Batch
 
 
 class TestBatch:
-    def test_batch_creation(self):
+    def test_batch_creation(self) -> None:
         batch = Batch(
             obs=torch.randn(8, 16),
             actions=torch.randn(8, 4),
@@ -16,7 +16,7 @@ class TestBatch:
         )
         assert batch.batch_size == 8
 
-    def test_batch_to_device(self):
+    def test_batch_to_device(self) -> None:
         batch = Batch(
             obs=torch.randn(4, 8),
             actions=torch.randn(4, 2),
@@ -27,7 +27,7 @@ class TestBatch:
         batch.to("cpu")  # should not crash
         assert batch.obs.device == torch.device("cpu")
 
-    def test_batch_optional_fields_default_none(self):
+    def test_batch_optional_fields_default_none(self) -> None:
         batch = Batch(
             obs=torch.randn(4, 8),
             actions=torch.randn(4, 2),
@@ -41,7 +41,7 @@ class TestBatch:
         assert batch.returns is None
         assert batch.extras == {}
 
-    def test_batch_with_optional_fields(self):
+    def test_batch_with_optional_fields(self) -> None:
         batch = Batch(
             obs=torch.randn(4, 8),
             actions=torch.randn(4, 2),

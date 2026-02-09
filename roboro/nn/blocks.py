@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 from torch import nn
 
@@ -91,7 +93,7 @@ class MLPBlock(nn.Module):
 
     # ── forward ─────────────────────────────────────────────────────────────
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        return cast(torch.Tensor, self.net(x))
 
     # ── init ────────────────────────────────────────────────────────────────
     def _init_weights(self) -> None:
