@@ -1,6 +1,6 @@
 """Epsilon-greedy actor wrapping a discrete Q-critic."""
 
-from typing import cast
+from typing import Any, cast
 
 import torch
 
@@ -29,7 +29,9 @@ class EpsilonGreedyActor(BaseActor):
         self.epsilon = epsilon
 
     @torch.no_grad()
-    def act(self, obs: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
+    def act(
+        self, obs: torch.Tensor, deterministic: bool = False
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """ε-greedy action selection.
 
         Args:
@@ -37,17 +39,19 @@ class EpsilonGreedyActor(BaseActor):
             deterministic: if ``True``, always take argmax (no exploration).
 
         Returns:
-            ``(B,)`` integer action indices.
+            action: ``(B,)`` integer action indices.
+            info: empty dict.
         """
         q_values = cast(torch.Tensor, self.q_critic(obs))  # (B, n_actions)
         if deterministic or self.epsilon <= 0.0:
-            return q_values.argmax(dim=-1)
+            return q_values.argmax(dim=-1), {}
 
         batch_size = obs.shape[0]
         greedy = q_values.argmax(dim=-1)
         random_actions = torch.randint(0, self.n_actions, (batch_size,), device=obs.device)
         mask = torch.rand(batch_size, device=obs.device) < self.epsilon
-        return torch.where(mask, random_actions, greedy)
+        action = torch.where(mask, random_actions, greedy)
+        return action, {}
 
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, None]:
         """For DQN, forward just returns the greedy action (no log-probs)."""

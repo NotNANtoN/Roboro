@@ -4,6 +4,8 @@ Outputs a tanh-squashed sample from a learned diagonal Gaussian.
 The reparameterization trick enables low-variance policy gradients.
 """
 
+from typing import Any
+
 import torch
 from torch import nn
 from torch.distributions import Normal
@@ -99,7 +101,9 @@ class SquashedGaussianActor(BaseActor):
     # ── BaseActor interface ──────────────────────────────────────────────────
 
     @torch.no_grad()
-    def act(self, obs: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
+    def act(
+        self, obs: torch.Tensor, deterministic: bool = False
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Sample an action for environment interaction.
 
         Args:
@@ -107,7 +111,8 @@ class SquashedGaussianActor(BaseActor):
             deterministic: if ``True``, return ``tanh(mean)`` (no sampling).
 
         Returns:
-            ``(B, action_dim)`` actions in ``[action_low, action_high]``.
+            actions: ``(B, action_dim)`` in ``[action_low, action_high]``.
+            info: empty dict.
         """
         mean, std = self._get_distribution(obs)
         if deterministic:
@@ -115,7 +120,7 @@ class SquashedGaussianActor(BaseActor):
         else:
             dist = Normal(mean, std)
             raw = torch.tanh(dist.sample())
-        return self._scale_action(raw)
+        return self._scale_action(raw), {}
 
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Reparameterized sample + exact log-prob (for training).

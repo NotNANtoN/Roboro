@@ -62,7 +62,9 @@ class DeterministicActor(BaseActor):
         return self.action_low + (raw + 1.0) * 0.5 * (self.action_high - self.action_low)
 
     @torch.no_grad()
-    def act(self, obs: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
+    def act(
+        self, obs: torch.Tensor, deterministic: bool = False
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Deterministic action + optional Gaussian noise.
 
         Args:
@@ -71,13 +73,14 @@ class DeterministicActor(BaseActor):
 
         Returns:
             ``(B, action_dim)`` actions clipped to valid range.
+            info: empty dict.
         """
         raw = self.trunk(obs)  # (B, action_dim) in [-1, 1]
         action = self._scale_action(raw)
         if not deterministic and self.noise_std > 0.0:
             noise = torch.randn_like(action) * self.noise_std
             action = (action + noise).clamp(self.action_low, self.action_high)
-        return action
+        return action, {}
 
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, None]:
         """Differentiable forward — returns scaled action (no log-prob)."""

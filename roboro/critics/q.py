@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from roboro.critics.base import BaseQCritic
-from roboro.nn.blocks import MLPBlock
+from roboro.nn.blocks import CategoricalSupport, MLPBlock
 
 
 class DiscreteQCritic(BaseQCritic):
@@ -40,6 +40,62 @@ class DiscreteQCritic(BaseQCritic):
 
     def forward(self, obs: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
         q_values = cast(torch.Tensor, self.trunk(obs))  # (B, n_actions)
+        if actions is not None:
+            # Gather Q-values for the specified actions
+            return cast(
+                torch.Tensor, q_values.gather(1, actions.long().unsqueeze(-1)).squeeze(-1)
+            )  # (B,)
+        return q_values
+
+
+class CategoricalQCritic(BaseQCritic):
+    """Q(s) → Categorical Distribution over R^{num_atoms} for each action.
+
+    Args:
+        feature_dim: size of the input feature vector.
+        n_actions: number of discrete actions.
+        v_min: minimum value of the support.
+        v_max: maximum value of the support.
+        num_atoms: number of atoms in the categorical distribution.
+        trunk: optional pre-built module.
+        **kwargs: forwarded to ``MLPBlock``.
+    """
+
+    def __init__(
+        self,
+        feature_dim: int,
+        n_actions: int,
+        v_min: float = -10.0,
+        v_max: float = 10.0,
+        num_atoms: int = 51,
+        trunk: nn.Module | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__()
+        self.n_actions = n_actions
+        self.num_atoms = num_atoms
+        self.support = CategoricalSupport(v_min=v_min, v_max=v_max, num_atoms=num_atoms)
+
+        if trunk is not None:
+            self.trunk = trunk
+        else:
+            self.trunk = MLPBlock(in_dim=feature_dim, out_dim=n_actions * num_atoms, **kwargs)
+
+    def forward(
+        self, obs: torch.Tensor, actions: torch.Tensor | None = None, return_logits: bool = False
+    ) -> torch.Tensor:
+        logits = cast(torch.Tensor, self.trunk(obs))  # (B, n_actions * num_atoms)
+        logits = logits.view(-1, self.n_actions, self.num_atoms)  # (B, n_actions, num_atoms)
+
+        if return_logits:
+            if actions is not None:
+                # Get logits for specific action: (B, num_atoms)
+                return logits[torch.arange(logits.shape[0]), actions.long()]
+            return logits  # (B, n_actions, num_atoms)
+
+        # Get expected scalar Q-values: (B, n_actions)
+        q_values = cast(torch.Tensor, self.support(logits).squeeze(-1))
+
         if actions is not None:
             # Gather Q-values for the specified actions
             return cast(

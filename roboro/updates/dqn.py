@@ -1,6 +1,9 @@
 """DQN update rule: classic Q-learning with target network."""
 
+from typing import Any, cast
+
 import torch
+import torch.nn.functional as F  # noqa: N812
 from torch import nn, optim
 
 from roboro.core.types import Batch
@@ -37,12 +40,14 @@ class DQNUpdate(BaseUpdate):
         td_loss: str | TDLossFn = "huber",
         max_grad_norm: float = 10.0,
         double_q: bool = False,
+        categorical: bool = False,
     ) -> None:
         self.q_critic = q_critic
         self.target = target
         self.gamma = gamma
         self.max_grad_norm = max_grad_norm
         self.double_q = double_q
+        self.categorical = categorical
         self.optimizer = optim.Adam(q_critic.parameters(), lr=lr)
 
         # Resolve loss function by name or accept a callable directly
@@ -55,22 +60,52 @@ class DQNUpdate(BaseUpdate):
         """Run one DQN gradient step."""
         # ── compute targets ─────────────────────────────────────────────────
         with torch.no_grad():
-            if self.double_q:
-                # Online net selects best action, target net evaluates it
-                next_q_online = self.q_critic(batch.next_obs)  # (B, n_actions)
-                best_actions = next_q_online.argmax(dim=-1, keepdim=True)  # (B, 1)
-                next_q_target = self.target(batch.next_obs)  # (B, n_actions)
-                max_next_q = next_q_target.gather(1, best_actions).squeeze(-1)  # (B,)
-            else:
-                next_q = self.target(batch.next_obs)  # (B, n_actions)
-                max_next_q = next_q.max(dim=-1).values  # (B,)
+            if self.categorical:
+                # For categorical DQN, we project the entire distribution
+                if self.double_q:
+                    next_q_online = self.q_critic(batch.next_obs)
+                    best_actions = next_q_online.argmax(dim=-1)
+                else:
+                    next_q = self.target(batch.next_obs)
+                    # For categorical, max action is based on expected value, which is computed automatically if we call support
+                    best_actions = next_q.argmax(dim=-1)
 
-            td_target = batch.rewards + self.gamma * max_next_q * (~batch.dones).float()
+                # Get full distribution from target
+                target_logits = self.target(
+                    batch.next_obs, return_logits=True
+                )  # (B, n_actions, num_atoms)
+                next_dist = F.softmax(
+                    target_logits[torch.arange(target_logits.shape[0]), best_actions], dim=-1
+                )
+
+                # Project back
+                target_dist = cast(Any, self.q_critic).support.c51_project(
+                    next_dist, batch.rewards, batch.dones, self.gamma
+                )
+            else:
+                if self.double_q:
+                    # Online net selects best action, target net evaluates it
+                    next_q_online = self.q_critic(batch.next_obs)  # (B, n_actions)
+                    best_actions = next_q_online.argmax(dim=-1, keepdim=True)  # (B, 1)
+                    next_q_target = self.target(batch.next_obs)  # (B, n_actions)
+                    max_next_q = next_q_target.gather(1, best_actions).squeeze(-1)  # (B,)
+                else:
+                    next_q = self.target(batch.next_obs)  # (B, n_actions)
+                    max_next_q = next_q.max(dim=-1).values  # (B,)
+
+                td_target = batch.rewards + self.gamma * max_next_q * (~batch.dones).float()
 
         # ── compute current Q ───────────────────────────────────────────────
-        current_q = self.q_critic(batch.obs, batch.actions)  # (B,)
-
-        loss = self._td_loss(current_q, td_target)
+        if self.categorical:
+            # For categorical DQN, we get logits: (B, num_atoms) for the chosen actions
+            current_q_logits = self.q_critic(batch.obs, batch.actions, return_logits=True)
+            loss = F.cross_entropy(current_q_logits, target_dist)
+            current_q = (
+                cast(Any, self.q_critic).support(current_q_logits).squeeze(-1)
+            )  # For logging
+        else:
+            current_q = self.q_critic(batch.obs, batch.actions)  # (B,)
+            loss = self._td_loss(current_q, td_target)
 
         # ── gradient step ───────────────────────────────────────────────────
         self.optimizer.zero_grad()
@@ -85,7 +120,9 @@ class DQNUpdate(BaseUpdate):
             loss=loss.item(),
             metrics={
                 "q_mean": current_q.mean().item(),
-                "td_target_mean": td_target.mean().item(),
+                "td_target_mean": td_target.mean().item()
+                if not self.categorical
+                else target_dist.sum().item() / target_dist.shape[0],
                 "grad_norm": float(grad_norm),
             },
         )

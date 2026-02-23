@@ -50,6 +50,7 @@ class ProgressTracker:
         step: int,
         *,
         loss: float = float("nan"),
+        metrics: dict[str, float] | None = None,
         actor: BaseActor | None = None,
         buf_size: int = 0,
     ) -> None:
@@ -73,6 +74,13 @@ class ProgressTracker:
             parts.append(f"eval={self._eval_rewards[-1]:.0f}")
 
         parts.append(f"loss={loss:.4f}")
+
+        # Add custom metrics if provided
+        if metrics:
+            for k, v in metrics.items():
+                if "dynamics" in k or "value" in k or "policy" in k:
+                    short_name = k.replace("loss/", "").replace("dynamics_", "dyn_")
+                    parts.append(f"{short_name}={v:.4f}")
 
         # Optional exploration info
         if actor is not None and hasattr(actor, "epsilon"):

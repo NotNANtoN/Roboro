@@ -93,7 +93,11 @@ Beyond the Monitor, integrate WandB into the training recipes:
 ### Model-Based RL
 
 - [ ] **`BaseDynamics`** — abstract interface already exists (`roboro/dynamics/base.py`)
-- [ ] **Deterministic MLP dynamics** — simplest world model
+- [ ] **Deterministic MLP dynamics** — simplest 1-step world model (s, a -> s', r)
+- [ ] **1-Step MCTS** — pure function for Monte Carlo Tree Search using 1-step dynamics and value network
+- [ ] **MCTSActor** — wrapper to use MCTS for acting (`act()` returns action + MCTS policy/value info)
+- [ ] **WorldModelUpdate** — trains 1-step dynamics model and critic simultaneously
+- [ ] **Sequential MuZero** — unrolled training with BPTT and SequenceBuffer (future)
 - [ ] **TD-MPC2** — deterministic latent dynamics + MPPI planning
 - [ ] **Dreamer-v3** — RSSM dynamics + imagination training
 - [ ] **`BasePlanner`** — abstract interface already exists (`roboro/planners/base.py`)

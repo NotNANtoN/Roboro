@@ -43,7 +43,7 @@ def evaluate(
         total = 0.0
         done = False
         while not done:
-            action = actor.act(obs_t, deterministic=True)
+            action, _info = actor.act(obs_t, deterministic=True)
             act_np = action.squeeze(0).cpu().numpy()
             # Handle discrete actions (scalar tensor -> int)
             act_np_env = int(act_np) if act_np.ndim == 0 else act_np
@@ -90,7 +90,7 @@ def train_off_policy(
     ) as tracker:
         for step in range(1, cfg.total_steps + 1):
             # ── act ─────────────────────────────────────────────────────
-            action = actor.act(obs_t)
+            action, info = actor.act(obs_t)
             act_np = action.squeeze(0).cpu().numpy()
             act_np_env = int(act_np) if act_np.ndim == 0 else act_np
 
@@ -103,6 +103,7 @@ def train_off_policy(
                 reward=float(reward),
                 next_obs=next_obs,
                 done=terminated,  # only true termination, not truncation
+                **info,
             )
 
             obs = next_obs
@@ -126,6 +127,7 @@ def train_off_policy(
                 with torch.autocast(device_type, dtype=torch.bfloat16, enabled=amp_enabled):
                     update_result = update.update(batch, step)
                 last_loss = update_result.loss
+                last_metrics = update_result.metrics
                 result.metrics.append(
                     {"step": step, "loss": update_result.loss, **update_result.metrics}
                 )
@@ -146,6 +148,12 @@ def train_off_policy(
                     eval_env.close()
 
             # ── progress ────────────────────────────────────────────────
-            tracker.step(step, loss=last_loss, actor=actor, buf_size=len(buffer))
+            tracker.step(
+                step,
+                loss=last_loss,
+                metrics=locals().get("last_metrics", None),
+                actor=actor,
+                buf_size=len(buffer),
+            )
 
     return result

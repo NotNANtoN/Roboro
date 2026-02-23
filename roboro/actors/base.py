@@ -1,6 +1,7 @@
 """Base actor interface."""
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import torch
 from torch import nn
@@ -22,7 +23,7 @@ class BaseActor(nn.Module, ABC):
         self,
         obs: torch.Tensor,
         deterministic: bool = False,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Select actions for environment interaction (no graph needed).
 
         Args:
@@ -30,7 +31,8 @@ class BaseActor(nn.Module, ABC):
             deterministic: if True, suppress exploration noise / sampling.
 
         Returns:
-            ``(B, *action_shape)`` actions ready to send to the environment.
+            actions: ``(B, *action_shape)`` ready to send to the environment.
+            info: auxiliary data dict (e.g. MCTS policy, log-probs).
         """
 
     @abstractmethod

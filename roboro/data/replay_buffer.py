@@ -51,6 +51,9 @@ class ReplayBuffer:
         # Terminal observations: only stored at episode boundaries.
         self._terminal_obs: dict[int, np.ndarray] = {}
 
+        # Extra auxiliary info (e.g. mcts targets, log probs)
+        self._extras: dict[str, np.ndarray] = {}
+
         self._pos = 0  # next write position
         self._size = 0  # current number of stored transitions
         self._rng = np.random.default_rng(seed)  # fast, modern NumPy RNG
@@ -64,6 +67,7 @@ class ReplayBuffer:
         reward: float,
         next_obs: np.ndarray | torch.Tensor,
         done: bool,
+        **kwargs: np.ndarray | torch.Tensor,
     ) -> None:
         """Store a single transition.
 
@@ -77,6 +81,13 @@ class ReplayBuffer:
         self._actions[idx] = _as_numpy(action)
         self._rewards[idx] = float(reward)
         self._dones[idx] = bool(done)
+
+        for k, v in kwargs.items():
+            arr = _as_numpy(v)
+            if k not in self._extras:
+                # Initialize extra array on first add
+                self._extras[k] = np.zeros((self.capacity, *arr.shape), dtype=arr.dtype)
+            self._extras[k][idx] = arr
 
         if done:
             self._terminal_obs[idx] = _as_numpy(next_obs)
@@ -120,6 +131,8 @@ class ReplayBuffer:
             for i in np.flatnonzero(terminal_mask):
                 next_obs[i] = self._terminal_obs[indices[i]]
 
+        extras = {k: torch.from_numpy(v[indices]) for k, v in self._extras.items()}
+
         return Batch(
             obs=torch.from_numpy(self._obs[indices]),
             actions=torch.from_numpy(self._actions[indices]),
@@ -127,6 +140,7 @@ class ReplayBuffer:
             next_obs=torch.from_numpy(next_obs),
             dones=torch.from_numpy(self._dones[indices]),
             indices=torch.from_numpy(indices),
+            extras=extras,
         )
 
     def __len__(self) -> int:

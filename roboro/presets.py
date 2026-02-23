@@ -21,6 +21,7 @@ from roboro.core.config import (
     BufferCfg,
     ContinuousActorCriticCfg,
     DiscreteQCfg,
+    ModelBasedCfg,
     NetworkCfg,
     TargetNetCfg,
     TrainCfg,
@@ -90,6 +91,35 @@ DOUBLE_DQN = DiscreteQCfg(
 )
 """van Hasselt et al., 2016.
 DQN + online-net action selection with target-net evaluation (reduces overestimation).
+"""
+
+C51 = DiscreteQCfg(
+    network=NetworkCfg(hidden_dim=120, n_layers=2, activation="relu", use_layer_norm=False),
+    target=TargetNetCfg(mode="hard", hard_update_period=500),
+    buffer=BufferCfg(capacity=10_000),
+    train=TrainCfg(
+        total_steps=500_000,
+        warmup_steps=10_000,
+        batch_size=128,
+        train_freq=10,
+        eval_interval=50_000,
+        eval_episodes=10,
+    ),
+    lr=2.5e-4,
+    gamma=0.99,
+    td_loss="mse",  # unused in C51, but needed for config
+    max_grad_norm=0.5,
+    epsilon_start=1.0,
+    epsilon_end=0.05,
+    epsilon_decay_steps=250_000,
+    double_q=False,
+    categorical=True,
+    v_min=-10.0,
+    v_max=200.0,
+    num_atoms=51,
+)
+"""Bellemare et al., 2017.
+Categorical DQN (C51): predicts a categorical distribution over returns instead of an expected value.
 """
 
 
@@ -193,4 +223,37 @@ TD3 = ContinuousActorCriticCfg(
 )
 """Fujimoto et al., 2018.
 DDPG + clipped double Q + delayed actor update + target policy smoothing.
+"""
+
+
+# ── Model-Based family ────────────────────────────────────────────────────────
+
+MUZERO_1STEP = ModelBasedCfg(
+    dynamics_network=NetworkCfg(
+        hidden_dim=256, n_layers=2, activation="relu", use_layer_norm=False
+    ),
+    value_network=NetworkCfg(hidden_dim=256, n_layers=2, activation="relu", use_layer_norm=False),
+    policy_network=NetworkCfg(hidden_dim=256, n_layers=2, activation="relu", use_layer_norm=False),
+    buffer=BufferCfg(capacity=50_000),
+    train=TrainCfg(
+        total_steps=100_000,
+        warmup_steps=1_000,
+        batch_size=128,
+        train_freq=1,
+        eval_interval=5_000,
+        eval_episodes=10,
+    ),
+    lr=1e-3,
+    gamma=0.99,
+    max_grad_norm=10.0,
+    num_simulations=50,
+    c_puct=1.0,
+    temperature=1.0,
+    categorical=True,
+    v_min=-300.0,
+    v_max=300.0,
+    num_atoms=601,
+)
+"""1-Step Model-Based RL (Simplified MuZero).
+Jointly trains a 1-step dynamics model and AlphaZero-style actor/critic using MCTS targets.
 """

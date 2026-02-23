@@ -111,6 +111,12 @@ class DiscreteQCfg:
     # Variants
     double_q: bool = False  # True → Double DQN (van Hasselt et al., 2016)
 
+    # Categorical DQN (C51)
+    categorical: bool = False
+    v_min: float = -10.0
+    v_max: float = 10.0
+    num_atoms: int = 51
+
 
 @dataclass
 class ContinuousActorCriticCfg:
@@ -145,3 +151,37 @@ class ContinuousActorCriticCfg:
     learnable_alpha: bool = True  # auto-tune alpha toward target_entropy
     target_entropy: float | None = None  # default: -action_dim
     alpha_lr: float = 3e-4  # learning rate for log(alpha)
+
+
+@dataclass
+class ModelBasedCfg:
+    """1-Step Model-Based RL family (e.g., simplified MuZero).
+
+    MUZERO_1STEP is a *preset* of this config.
+    See ``roboro.presets``.
+    """
+
+    # Sub-configs
+    dynamics_network: NetworkCfg = field(default_factory=lambda: NetworkCfg(hidden_dim=256))
+    value_network: NetworkCfg = field(default_factory=lambda: NetworkCfg(hidden_dim=256))
+    policy_network: NetworkCfg = field(default_factory=lambda: NetworkCfg(hidden_dim=256))
+    buffer: BufferCfg = field(default_factory=lambda: BufferCfg(capacity=100_000))
+    train: TrainCfg = field(default_factory=lambda: TrainCfg(batch_size=256))
+
+    # Learning
+    lr: float = 1e-3
+    gamma: float = 0.99
+    max_grad_norm: float = 10.0
+
+    # MCTS Hyperparameters
+    num_simulations: int = 50
+    c_puct: float = 1.0
+    temperature: float = 1.0
+    dirichlet_alpha: float = 0.3
+    dirichlet_fraction: float = 0.25
+
+    # Categorical (C51)
+    categorical: bool = True
+    v_min: float = -300.0
+    v_max: float = 300.0
+    num_atoms: int = 601

@@ -3,6 +3,7 @@
 from typing import cast
 
 import torch
+import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
 
@@ -23,6 +24,114 @@ def get_activation(name: str) -> type[nn.Module]:
     if key not in activations:
         raise ValueError(f"Unknown activation '{name}'. Choose from {list(activations)}")
     return activations[key]
+
+
+class CategoricalSupport(nn.Module):
+    """C51 Categorical Distribution Support.
+
+    Transforms scalars into categorical distributions over a fixed set of bins,
+    and vice versa. Used to stabilize learning of large, unbounded values/rewards.
+    """
+
+    support: torch.Tensor
+
+    def __init__(self, v_min: float = -300.0, v_max: float = 300.0, num_atoms: int = 601) -> None:
+        super().__init__()
+        self.v_min = v_min
+        self.v_max = v_max
+        self.num_atoms = num_atoms
+        self.delta_z = (v_max - v_min) / (num_atoms - 1)
+
+        # Register support as a buffer so it moves to the correct device automatically
+        support = torch.linspace(v_min, v_max, num_atoms)
+        self.register_buffer("support", support)
+
+    def forward(self, logits: torch.Tensor) -> torch.Tensor:
+        """Convert logits to expected scalar value."""
+        probs = F.softmax(logits, dim=-1)
+        support_tensor = cast(torch.Tensor, self.support)
+        return (probs * support_tensor).sum(dim=-1, keepdim=True)
+
+    def to_categorical(self, x: torch.Tensor) -> torch.Tensor:
+        """Convert scalar value to categorical target distribution using l2 projection."""
+        x = x.squeeze(-1).clamp(self.v_min, self.v_max)
+        batch_size = x.shape[0]
+
+        # Compute bin indices and weights
+        b = (x - self.v_min) / self.delta_z
+        l_idx = b.floor().long()
+        u_idx = b.ceil().long()
+
+        # Handle exact matches (l_idx == u_idx) to prevent zero weights
+        exact_matches = l_idx == u_idx
+        u_idx[exact_matches] += 1
+        u_idx = u_idx.clamp(max=self.num_atoms - 1)
+
+        # Weights
+        wl = u_idx.float() - b
+        wu = b - l_idx.float()
+
+        # Build target distribution
+        target = torch.zeros(batch_size, self.num_atoms, device=x.device)
+        # Using scatter_add_ to safely accumulate weights
+        target.scatter_add_(1, l_idx.unsqueeze(1), wl.unsqueeze(1))
+        target.scatter_add_(1, u_idx.unsqueeze(1), wu.unsqueeze(1))
+        return target
+
+    def c51_project(
+        self, next_dist: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor, gamma: float
+    ) -> torch.Tensor:
+        """Project the next state distribution onto the current support.
+
+        Args:
+            next_dist: Probabilities of the next state/action (B, num_atoms).
+            rewards: Rewards tensor (B,).
+            dones: Boolean termination tensor (B,).
+            gamma: Discount factor.
+
+        Returns:
+            Target categorical distribution (B, num_atoms).
+        """
+        batch_size = next_dist.shape[0]
+
+        # Ensure rewards and dones are (B, 1) to broadcast with support (num_atoms,)
+        rewards = rewards.view(batch_size, 1)
+        dones = dones.view(batch_size, 1).float()
+
+        # Compute t_z = R + gamma * z * (1 - done)
+        support_tensor = cast(torch.Tensor, self.support)
+        t_z = rewards + gamma * support_tensor.unsqueeze(0) * (1.0 - dones)
+        t_z = t_z.clamp(self.v_min, self.v_max)
+
+        # Compute bin indices and weights
+        b = (t_z - self.v_min) / self.delta_z
+        l_idx = b.floor().long()
+        u_idx = b.ceil().long()
+
+        # Handle exact matches
+        exact_matches = l_idx == u_idx
+        u_idx[exact_matches] += 1
+        u_idx = u_idx.clamp(max=self.num_atoms - 1)
+
+        # Distribute probabilities from next_dist into the current support bins
+        target = torch.zeros(batch_size, self.num_atoms, device=next_dist.device)
+        offset = (
+            torch.linspace(
+                0, (batch_size - 1) * self.num_atoms, batch_size, device=next_dist.device
+            )
+            .long()
+            .unsqueeze(1)
+        )
+
+        # Flatten for fast scatter
+        target.view(-1).index_add_(
+            0, (l_idx + offset).view(-1), (next_dist * (u_idx.float() - b)).view(-1)
+        )
+        target.view(-1).index_add_(
+            0, (u_idx + offset).view(-1), (next_dist * (b - l_idx.float())).view(-1)
+        )
+
+        return target
 
 
 class MLPBlock(nn.Module):

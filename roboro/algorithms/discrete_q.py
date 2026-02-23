@@ -53,15 +53,33 @@ def train_discrete_q(
     n_actions = int(env.action_space.n)
 
     # ── build components ────────────────────────────────────────────────────
+    from roboro.critics.base import BaseQCritic
+
     net = cfg.network
-    q_critic = DiscreteQCritic(
-        feature_dim=obs_dim,
-        n_actions=n_actions,
-        hidden_dim=net.hidden_dim,
-        n_layers=net.n_layers,
-        activation=net.activation,
-        use_layer_norm=net.use_layer_norm,
-    ).to(device)
+    q_critic: BaseQCritic
+    if getattr(cfg, "categorical", False):
+        from roboro.critics.q import CategoricalQCritic
+
+        q_critic = CategoricalQCritic(
+            feature_dim=obs_dim,
+            n_actions=n_actions,
+            v_min=cfg.v_min,
+            v_max=cfg.v_max,
+            num_atoms=cfg.num_atoms,
+            hidden_dim=net.hidden_dim,
+            n_layers=net.n_layers,
+            activation=net.activation,
+            use_layer_norm=net.use_layer_norm,
+        ).to(device)
+    else:
+        q_critic = DiscreteQCritic(
+            feature_dim=obs_dim,
+            n_actions=n_actions,
+            hidden_dim=net.hidden_dim,
+            n_layers=net.n_layers,
+            activation=net.activation,
+            use_layer_norm=net.use_layer_norm,
+        ).to(device)
 
     target = TargetNetwork(
         q_critic,
@@ -91,6 +109,7 @@ def train_discrete_q(
         td_loss=cfg.td_loss,
         max_grad_norm=cfg.max_grad_norm,
         double_q=cfg.double_q,
+        categorical=getattr(cfg, "categorical", False),
     )
 
     # ── epsilon schedule (linear decay) ─────────────────────────────────────
