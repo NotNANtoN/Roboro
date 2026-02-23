@@ -65,11 +65,33 @@ class CategoricalSupport(nn.Module):
         # Handle exact matches (l_idx == u_idx) to prevent zero weights
         exact_matches = l_idx == u_idx
         u_idx[exact_matches] += 1
+
+        # When clamping u_idx to self.num_atoms - 1, we must also ensure l_idx is valid
+        # If b is exactly at v_max, l_idx and u_idx will both initially be num_atoms - 1
+        # Then exact_matches makes u_idx = num_atoms.
+        # Clamping u_idx makes it num_atoms - 1 again.
+        # But wait, if they are both num_atoms - 1, wl = 0 and wu = 0.
+        # Let's fix exact matches more robustly:
         u_idx = u_idx.clamp(max=self.num_atoms - 1)
+        l_idx = l_idx.clamp(max=self.num_atoms - 1)
+
+        # We need to handle the case where x is exactly v_max differently,
+        # or just use the standard l2 projection formula which inherently handles this if done right.
+        # If l_idx == u_idx, then b is an integer.
+        # The weight wl = u_idx - b = 0. wu = b - l_idx = 0. We'd get 0 total weight.
+        # The standard fix is to force l_idx and u_idx apart by adding 1 to u_idx BEFORE clamping,
+        # or setting weights manually for exact matches.
 
         # Weights
         wl = u_idx.float() - b
         wu = b - l_idx.float()
+
+        # Fix exact match weights: if l_idx == b, then it's exactly on a bin.
+        # All weight should go to l_idx.
+        exact_matches = l_idx.float() == b
+        wl[exact_matches] = 1.0
+        wu[exact_matches] = 0.0
+        u_idx[exact_matches] = l_idx[exact_matches]  # Keep u_idx within bounds
 
         # Build target distribution
         target = torch.zeros(batch_size, self.num_atoms, device=x.device)
@@ -108,10 +130,17 @@ class CategoricalSupport(nn.Module):
         l_idx = b.floor().long()
         u_idx = b.ceil().long()
 
-        # Handle exact matches
-        exact_matches = l_idx == u_idx
-        u_idx[exact_matches] += 1
+        l_idx = l_idx.clamp(max=self.num_atoms - 1)
         u_idx = u_idx.clamp(max=self.num_atoms - 1)
+
+        wl = u_idx.float() - b
+        wu = b - l_idx.float()
+
+        # Handle exact matches robustly
+        exact_matches = l_idx.float() == b
+        wl[exact_matches] = 1.0
+        wu[exact_matches] = 0.0
+        u_idx[exact_matches] = l_idx[exact_matches]
 
         # Distribute probabilities from next_dist into the current support bins
         target = torch.zeros(batch_size, self.num_atoms, device=next_dist.device)
@@ -124,12 +153,8 @@ class CategoricalSupport(nn.Module):
         )
 
         # Flatten for fast scatter
-        target.view(-1).index_add_(
-            0, (l_idx + offset).view(-1), (next_dist * (u_idx.float() - b)).view(-1)
-        )
-        target.view(-1).index_add_(
-            0, (u_idx + offset).view(-1), (next_dist * (b - l_idx.float())).view(-1)
-        )
+        target.view(-1).index_add_(0, (l_idx + offset).view(-1), (next_dist * wl).view(-1))
+        target.view(-1).index_add_(0, (u_idx + offset).view(-1), (next_dist * wu).view(-1))
 
         return target
 
