@@ -47,7 +47,7 @@ GAMMA = 0.99
 BATCH_SIZE = 256
 BUFFER_CAPACITY = 100_000
 WARMUP_STEPS = 5_000
-TRAIN_FREQ = 1
+TRAIN_FREQ = 2  # 1 gradient step per 2 env steps (keeps CPU time manageable)
 TAU = 0.005
 
 # SAC-specific
