@@ -1,4 +1,4 @@
-"""Unified RL training: shared hyperparameters across CartPole and Pendulum.
+"""Unified RL training: shared SAC hyperparameters across Hopper and Walker2d.
 
 THIS FILE IS MODIFIED BY THE AUTORESEARCH AGENT.
 Everything is fair game: architecture, optimizer, hyperparameters, training
@@ -6,7 +6,7 @@ loop, loss function, exploration strategy, replay buffer, etc.
 
 Goal: maximize `score` — the mean of normalized returns across BOTH envs.
 The SAME core hyperparameters (hidden_dim, n_layers, lr, gamma, batch_size,
-etc.) must work for both discrete (CartPole) and continuous (Pendulum).
+etc.) must work for both Hopper-v5 and Walker2d-v5.
 
 You may import anything from the roboro library (../roboro/).
 You may NOT modify prepare.py.
@@ -24,16 +24,14 @@ import gymnasium as gym
 
 from roboro.core.seed import set_seed
 from roboro.core.config import TrainCfg
-from roboro.critics.q import DiscreteQCritic, ContinuousQCritic, TwinQCritic
+from roboro.critics.q import ContinuousQCritic, TwinQCritic
 from roboro.critics.target import TargetNetwork
-from roboro.actors.epsilon_greedy import EpsilonGreedyActor
 from roboro.actors.squashed_gaussian import SquashedGaussianActor
 from roboro.data.replay_buffer import ReplayBuffer
-from roboro.updates.dqn import DQNUpdate
 from roboro.updates.sac import SACUpdate
 from roboro.training.trainer import train_off_policy
 
-from prepare import TASKS, evaluate, print_summary
+from prepare import TASKS, evaluate, print_summary, start_timer, check_time
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SHARED HYPERPARAMETERS — these must work for BOTH envs
@@ -41,104 +39,28 @@ from prepare import TASKS, evaluate, print_summary
 SEED = 42
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-HIDDEN_DIM = 128
+HIDDEN_DIM = 256
 N_LAYERS = 2
 ACTIVATION = "relu"
 LR = 3e-4
 GAMMA = 0.99
-BATCH_SIZE = 128
-BUFFER_CAPACITY = 50_000
-WARMUP_STEPS = 1_000
+BATCH_SIZE = 256
+BUFFER_CAPACITY = 100_000
+WARMUP_STEPS = 5_000
 TRAIN_FREQ = 1
 TAU = 0.005
 
-# DQN-specific (CartPole)
-EPSILON_START = 1.0
-EPSILON_END = 0.05
-EPSILON_DECAY_STEPS = 25_000
-DOUBLE_Q = True
-TD_LOSS = "mse"
-MAX_GRAD_NORM = 10.0
-
-# SAC-specific (Pendulum)
+# SAC-specific
 INIT_ALPHA = 1.0
 LEARNABLE_ALPHA = True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TASK 1: CartPole-v1 (discrete Q-learning)
+# GENERIC SAC TRAINING FUNCTION
 # ═════════════════════════════════════════════════════════════════════════════
-def train_cartpole() -> tuple[float, int]:
-    """Train DQN on CartPole with shared hyperparams. Returns (eval_return, num_params)."""
-    task = TASKS["cartpole"]
-    set_seed(SEED)
-
-    env = gym.make(task.env_id)
-    obs_dim = env.observation_space.shape[0]
-    n_actions = int(env.action_space.n)
-
-    q_critic = DiscreteQCritic(
-        feature_dim=obs_dim,
-        n_actions=n_actions,
-        hidden_dim=HIDDEN_DIM,
-        n_layers=N_LAYERS,
-        activation=ACTIVATION,
-    )
-    target_net = TargetNetwork(q_critic, mode="polyak", tau=TAU)
-    actor = EpsilonGreedyActor(q_critic, n_actions=n_actions, epsilon=EPSILON_START)
-
-    buffer = ReplayBuffer(
-        capacity=BUFFER_CAPACITY, obs_shape=(obs_dim,), action_shape=(), seed=SEED
-    )
-
-    update = DQNUpdate(
-        q_critic,
-        target_net,
-        lr=LR,
-        gamma=GAMMA,
-        td_loss=TD_LOSS,
-        max_grad_norm=MAX_GRAD_NORM,
-        double_q=DOUBLE_Q,
-    )
-
-    _orig = update.update
-
-    def _scheduled(batch, step):
-        frac = min(1.0, step / EPSILON_DECAY_STEPS)
-        actor.epsilon = EPSILON_START + frac * (EPSILON_END - EPSILON_START)
-        return _orig(batch, step)
-
-    update.update = _scheduled  # type: ignore[assignment]
-
-    cfg = TrainCfg(
-        total_steps=task.step_budget,
-        warmup_steps=WARMUP_STEPS,
-        batch_size=BATCH_SIZE,
-        train_freq=TRAIN_FREQ,
-        eval_interval=task.step_budget + 1,
-        device="cpu",
-        show_progress=False,
-    )
-    train_off_policy(env, actor, update, buffer, cfg, device="cpu")
-
-    def policy_fn(obs):
-        with torch.no_grad():
-            obs_t = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
-            action, _ = actor.act(obs_t, deterministic=True)
-            return int(action.squeeze(0).item())
-
-    eval_return = evaluate(task.env_id, policy_fn, task.eval_episodes, task.eval_seed)
-    num_params = sum(p.numel() for p in q_critic.parameters())
-    env.close()
-    return eval_return, num_params
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# TASK 2: Pendulum-v1 (continuous actor-critic / SAC)
-# ═════════════════════════════════════════════════════════════════════════════
-def train_pendulum() -> tuple[float, int]:
-    """Train SAC on Pendulum with shared hyperparams. Returns (eval_return, num_params)."""
-    task = TASKS["pendulum"]
+def train_sac(task_name: str) -> tuple[float, int]:
+    """Train SAC on the given task with shared hyperparams."""
+    task = TASKS[task_name]
     set_seed(SEED)
     device = torch.device(DEVICE)
 
@@ -206,7 +128,7 @@ def train_pendulum() -> tuple[float, int]:
     )
     train_off_policy(env, actor, update, buffer, cfg, device=device)
 
-    def policy_fn(obs):
+    def policy_fn(obs: np.ndarray) -> np.ndarray:
         with torch.no_grad():
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             action, _ = actor.act(obs_t, deterministic=True)
@@ -224,19 +146,21 @@ def train_pendulum() -> tuple[float, int]:
 # RUN BOTH TASKS
 # ═════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
+    start_timer()
     start = time.time()
 
-    cartpole_return, num_params_q = train_cartpole()
-    pendulum_return, num_params_ac = train_pendulum()
+    hopper_return, num_params_hopper = train_sac("hopper")
+    check_time()
 
-    total_time = time.time() - start
+    walker_return, num_params_walker = train_sac("walker")
+    total_time = check_time()
 
     print_summary(
-        cartpole_return=cartpole_return,
-        pendulum_return=pendulum_return,
+        hopper_return=hopper_return,
+        walker_return=walker_return,
         training_seconds=total_time,
         total_seconds=total_time,
-        num_params_q=num_params_q,
-        num_params_ac=num_params_ac,
+        num_params_hopper=num_params_hopper,
+        num_params_walker=num_params_walker,
         device=DEVICE,
     )
