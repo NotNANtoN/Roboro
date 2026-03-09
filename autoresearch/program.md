@@ -15,7 +15,11 @@ To set up a new experiment run, work with the user to:
    - `prepare.py` — fixed constants, task specs, evaluation harness. **Do not modify.**
    - `train.py` — the file you modify. Algorithm, architecture, hyperparameters, training loop, everything.
    - `../roboro/` — the RL library you can import from but **not modify**. Browse it for available components.
-4. **Confirm and go**: Confirm setup looks good, then kick off experimentation.
+4. **Initialize results.tsv** with the header row:
+   ```bash
+   printf 'commit\tscore\tcartpole\tpendulum\ttime_s\tstatus\tdescription\n' > results.tsv
+   ```
+5. **Confirm and go**: Confirm setup looks good, then kick off experimentation.
 
 ## The challenge
 
@@ -120,17 +124,40 @@ grep "^score:" run.log
 
 When an experiment finishes, log it to `results.tsv` (tab-separated).
 
+The TSV has a header row and 7 columns:
+
 ```
 commit	score	cartpole	pendulum	time_s	status	description
 ```
 
 1. git commit hash (short, 7 chars)
 2. aggregate score (e.g. 0.7200) — use 0.0000 for crashes
-3. cartpole eval_return (e.g. 425.00)
-4. pendulum eval_return (e.g. -645.20)
+3. cartpole eval_return (e.g. 425.00) — use 0.00 for crashes
+4. pendulum eval_return (e.g. -645.20) — use 0.00 for crashes
 5. total wall time in seconds
 6. status: `keep`, `discard`, or `crash`
 7. short description of what this experiment tried
+
+**How to extract values from run.log and append a row:**
+
+```bash
+# Get the commit hash
+COMMIT=$(git rev-parse --short HEAD)
+
+# Extract metrics from run.log
+SCORE=$(grep "^score:" run.log | awk '{print $2}')
+CARTPOLE=$(grep "^cartpole_return:" run.log | awk '{print $2}')
+PENDULUM=$(grep "^pendulum_return:" run.log | awk '{print $2}')
+TIME_S=$(grep "^total_seconds:" run.log | awk '{print $2}')
+
+# Append to results.tsv (set STATUS and DESC before this)
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$COMMIT" "$SCORE" "$CARTPOLE" "$PENDULUM" "$TIME_S" "$STATUS" "$DESC" >> results.tsv
+```
+
+For a **crash**, log it as:
+```bash
+printf '%s\t0.0000\t0.00\t0.00\t0.0\tcrash\t%s\n' "$COMMIT" "$DESC" >> results.tsv
+```
 
 Do NOT commit results.tsv or progress.png — leave them untracked.
 
@@ -140,14 +167,14 @@ LOOP FOREVER:
 
 1. Look at the git state and results so far.
 2. Choose an experimental idea. Modify `train.py`.
-3. `git commit` the change.
+3. `git commit` the change with a short message describing the experiment.
 4. Run: `python train.py > run.log 2>&1`
 5. Read results: `grep "^score:\|^cartpole_return:\|^pendulum_return:" run.log`
 6. If grep is empty, the run crashed. Run `tail -n 50 run.log` for the error.
-7. Record the result in results.tsv.
+7. Record the result in results.tsv (see "Logging results" above for the exact commands).
 8. Update the progress chart: `python plot.py`
 9. If score improved: **keep** — advance the branch.
-10. If score is equal or worse: **discard** — `git reset --hard HEAD~1`.
+10. If score is equal or worse: **discard** — `git reset --hard HEAD~1` (results.tsv and progress.png are untracked, so they survive the reset).
 
 **Timeout**: If a run exceeds 5 minutes, kill it and treat as failure.
 

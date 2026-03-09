@@ -6,6 +6,11 @@ outputs/
 multirun/
 mlruns/
 
+# ── Autoresearch (untracked experiment state) ────────────────────────────────
+autoresearch/results.tsv
+autoresearch/progress.png
+autoresearch/run.log
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
