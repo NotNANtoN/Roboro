@@ -1,7 +1,7 @@
 """Unified RL training: shared SAC hyperparameters across Hopper and Walker2d.
 
 THIS FILE IS MODIFIED BY THE AUTORESEARCH AGENT.
-Custom training loop with delayed actor updates for more critic training.
+Custom loop: LN + target net, delayed actor, fast custom buffer.
 """
 
 import os
@@ -20,7 +20,6 @@ from roboro.core.seed import set_seed
 from roboro.critics.q import ContinuousQCritic, TwinQCritic
 from roboro.critics.target import TargetNetwork
 from roboro.actors.squashed_gaussian import SquashedGaussianActor
-from roboro.data.replay_buffer import ReplayBuffer
 
 from prepare import TASKS, evaluate, print_summary, start_timer, check_time
 
@@ -38,14 +37,59 @@ LR = 1e-3
 GAMMA = 0.99
 BATCH_SIZE = 256
 BUFFER_CAPACITY = 100_000
-WARMUP_STEPS = 1000
-ACTOR_DELAY = 2  # update actor every N critic updates
+WARMUP_STEPS = 500
+ACTOR_DELAY = 2
 TAU = 0.005
 
 INIT_ALPHA = 0.1
 LEARNABLE_ALPHA = True
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# FAST REPLAY BUFFER
+# ═════════════════════════════════════════════════════════════════════════════
+class FastReplayBuffer:
+    __slots__ = ('obs', 'actions', 'rewards', 'next_obs', 'dones',
+                 'pos', 'size', 'capacity', 'rng')
+
+    def __init__(self, capacity, obs_dim, action_dim, seed=None):
+        self.capacity = capacity
+        self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
+        self.actions = np.zeros((capacity, action_dim), dtype=np.float32)
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=np.bool_)
+        self.pos = 0
+        self.size = 0
+        self.rng = np.random.default_rng(seed)
+
+    def add(self, obs, action, reward, next_obs, done):
+        i = self.pos
+        self.obs[i] = obs
+        self.actions[i] = action
+        self.rewards[i] = reward
+        self.next_obs[i] = next_obs
+        self.dones[i] = done
+        self.pos = (self.pos + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size):
+        idx = self.rng.integers(0, self.size, size=batch_size)
+        return (
+            torch.from_numpy(self.obs[idx]),
+            torch.from_numpy(self.actions[idx]),
+            torch.from_numpy(self.rewards[idx]),
+            torch.from_numpy(self.next_obs[idx]),
+            torch.from_numpy(self.dones[idx]),
+        )
+
+    def __len__(self):
+        return self.size
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRAINING
+# ═════════════════════════════════════════════════════════════════════════════
 def train_sac(task_name: str) -> tuple[float, int]:
     task = TASKS[task_name]
     set_seed(SEED)
@@ -77,10 +121,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
     critic = TwinQCritic(q1, q2).to(device)
     critic_target = TargetNetwork(critic, mode="polyak", tau=TAU).to(device)
 
-    buffer = ReplayBuffer(
-        capacity=BUFFER_CAPACITY, obs_shape=(obs_dim,),
-        action_shape=(action_dim,), seed=SEED,
-    )
+    buffer = FastReplayBuffer(BUFFER_CAPACITY, obs_dim, action_dim, seed=SEED)
 
     actor_opt = torch.optim.Adam(actor.parameters(), lr=LR)
     critic_opt = torch.optim.Adam(critic.parameters(), lr=LR)
@@ -93,48 +134,43 @@ def train_sac(task_name: str) -> tuple[float, int]:
 
     obs, _ = env.reset(seed=SEED)
     obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-    episode_reward = 0.0
+    ep_reward = 0.0
     grad_steps = 0
 
     for step in range(1, task.step_budget + 1):
-        # Act
         action, _ = actor.act(obs_t)
         act_np = action.squeeze(0).cpu().numpy()
         next_obs, reward, terminated, truncated, _ = env.step(act_np)
+        ep_reward += float(reward)
 
-        buffer.add(obs=obs, action=act_np, reward=float(reward),
-                   next_obs=next_obs, done=terminated)
+        buffer.add(obs, act_np, float(reward), next_obs, terminated)
 
         obs = next_obs
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        episode_reward += float(reward)
 
         if terminated or truncated:
-            episode_reward = 0.0
+            ep_reward = 0.0
             obs, _ = env.reset()
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
 
-        # Learn every step after warmup
         if step >= WARMUP_STEPS and len(buffer) >= BATCH_SIZE:
-            batch = buffer.sample(BATCH_SIZE).to(device)
+            b_obs, b_act, b_rew, b_nobs, b_done = buffer.sample(BATCH_SIZE)
             alpha = log_alpha.exp()
             grad_steps += 1
 
-            # Critic update (every step)
             with torch.no_grad():
-                na, nlp = actor(batch.next_obs)
-                tq = critic_target(batch.next_obs, na)
-                soft_t = batch.rewards + GAMMA * (~batch.dones).float() * (tq - alpha * nlp)
-            q1v, q2v = critic.both(batch.obs, batch.actions)
+                na, nlp = actor(b_nobs)
+                tq = critic_target(b_nobs, na)
+                soft_t = b_rew + GAMMA * (~b_done).float() * (tq - alpha * nlp)
+            q1v, q2v = critic.both(b_obs, b_act)
             c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
             critic_opt.zero_grad()
             c_loss.backward()
             critic_opt.step()
 
-            # Actor + alpha update (delayed)
             if grad_steps % ACTOR_DELAY == 0:
-                ap, lp = actor(batch.obs)
-                qp = critic(batch.obs, ap)
+                ap, lp = actor(b_obs)
+                qp = critic(b_obs, ap)
                 a_loss = (alpha.detach() * lp - qp).mean()
                 actor_opt.zero_grad()
                 a_loss.backward()
@@ -146,7 +182,6 @@ def train_sac(task_name: str) -> tuple[float, int]:
                     al.backward()
                     alpha_opt.step()
 
-            # Target update
             critic_target.update()
 
     def policy_fn(o):
