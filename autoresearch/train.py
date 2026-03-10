@@ -1,6 +1,7 @@
 """Unified RL training: shared SAC hyperparameters across Hopper and Walker2d.
 
 THIS FILE IS MODIFIED BY THE AUTORESEARCH AGENT.
+Custom training loop with delayed actor updates for more critic training.
 """
 
 import os
@@ -11,16 +12,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import gymnasium as gym
 
 from roboro.core.seed import set_seed
-from roboro.core.config import TrainCfg
 from roboro.critics.q import ContinuousQCritic, TwinQCritic
 from roboro.critics.target import TargetNetwork
 from roboro.actors.squashed_gaussian import SquashedGaussianActor
 from roboro.data.replay_buffer import ReplayBuffer
-from roboro.updates.sac import SACUpdate
-from roboro.training.trainer import train_off_policy
 
 from prepare import TASKS, evaluate, print_summary, start_timer, check_time
 
@@ -39,7 +39,7 @@ GAMMA = 0.99
 BATCH_SIZE = 256
 BUFFER_CAPACITY = 100_000
 WARMUP_STEPS = 1000
-TRAIN_FREQ = 2
+ACTOR_DELAY = 2  # update actor every N critic updates
 TAU = 0.005
 
 INIT_ALPHA = 0.1
@@ -82,34 +82,84 @@ def train_sac(task_name: str) -> tuple[float, int]:
         action_shape=(action_dim,), seed=SEED,
     )
 
-    update = SACUpdate(
-        actor=actor, critic=critic, critic_target=critic_target,
-        actor_lr=LR, critic_lr=LR, alpha_lr=LR,
-        gamma=GAMMA, init_alpha=INIT_ALPHA, learnable_alpha=LEARNABLE_ALPHA,
-    )
+    actor_opt = torch.optim.Adam(actor.parameters(), lr=LR)
+    critic_opt = torch.optim.Adam(critic.parameters(), lr=LR)
 
-    cfg = TrainCfg(
-        total_steps=task.step_budget,
-        warmup_steps=WARMUP_STEPS,
-        batch_size=BATCH_SIZE,
-        train_freq=TRAIN_FREQ,
-        eval_interval=task.step_budget + 1,
-        device=DEVICE,
-        show_progress=False,
-    )
-    train_off_policy(env, actor, update, buffer, cfg, device=device)
+    log_alpha = torch.tensor(float(INIT_ALPHA)).log()
+    if LEARNABLE_ALPHA:
+        log_alpha = nn.Parameter(log_alpha)
+    alpha_opt = torch.optim.Adam([log_alpha], lr=LR) if LEARNABLE_ALPHA else None
+    target_entropy = -float(action_dim)
 
-    def policy_fn(obs: np.ndarray) -> np.ndarray:
-        with torch.no_grad():
+    obs, _ = env.reset(seed=SEED)
+    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    episode_reward = 0.0
+    grad_steps = 0
+
+    for step in range(1, task.step_budget + 1):
+        # Act
+        action, _ = actor.act(obs_t)
+        act_np = action.squeeze(0).cpu().numpy()
+        next_obs, reward, terminated, truncated, _ = env.step(act_np)
+
+        buffer.add(obs=obs, action=act_np, reward=float(reward),
+                   next_obs=next_obs, done=terminated)
+
+        obs = next_obs
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+        episode_reward += float(reward)
+
+        if terminated or truncated:
+            episode_reward = 0.0
+            obs, _ = env.reset()
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-            action, _ = actor.act(obs_t, deterministic=True)
-            return action.squeeze(0).cpu().numpy()
+
+        # Learn every step after warmup
+        if step >= WARMUP_STEPS and len(buffer) >= BATCH_SIZE:
+            batch = buffer.sample(BATCH_SIZE).to(device)
+            alpha = log_alpha.exp()
+            grad_steps += 1
+
+            # Critic update (every step)
+            with torch.no_grad():
+                na, nlp = actor(batch.next_obs)
+                tq = critic_target(batch.next_obs, na)
+                soft_t = batch.rewards + GAMMA * (~batch.dones).float() * (tq - alpha * nlp)
+            q1v, q2v = critic.both(batch.obs, batch.actions)
+            c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
+            critic_opt.zero_grad()
+            c_loss.backward()
+            critic_opt.step()
+
+            # Actor + alpha update (delayed)
+            if grad_steps % ACTOR_DELAY == 0:
+                ap, lp = actor(batch.obs)
+                qp = critic(batch.obs, ap)
+                a_loss = (alpha.detach() * lp - qp).mean()
+                actor_opt.zero_grad()
+                a_loss.backward()
+                actor_opt.step()
+
+                if LEARNABLE_ALPHA and alpha_opt is not None:
+                    al = -(log_alpha.exp() * (lp.detach() + target_entropy)).mean()
+                    alpha_opt.zero_grad()
+                    al.backward()
+                    alpha_opt.step()
+
+            # Target update
+            critic_target.update()
+
+    def policy_fn(o):
+        with torch.no_grad():
+            o_t = torch.as_tensor(o, dtype=torch.float32, device=device).unsqueeze(0)
+            a, _ = actor.act(o_t, deterministic=True)
+            return a.squeeze(0).cpu().numpy()
 
     eval_return = evaluate(task.env_id, policy_fn, task.eval_episodes, task.eval_seed)
-    num_params = sum(p.numel() for p in actor.parameters()) + \
-                 sum(p.numel() for p in critic.parameters())
+    n_params = sum(p.numel() for p in actor.parameters()) + \
+               sum(p.numel() for p in critic.parameters())
     env.close()
-    return eval_return, num_params
+    return eval_return, n_params
 
 
 if __name__ == "__main__":
