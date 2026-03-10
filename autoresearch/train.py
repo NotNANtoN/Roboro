@@ -30,9 +30,10 @@ from prepare import TASKS, evaluate, print_summary, start_timer, check_time
 SEED = 42
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-HIDDEN_DIM = 256
+HIDDEN_DIM = 128
 N_LAYERS = 2
 ACTIVATION = "relu"
+USE_LAYER_NORM = True
 LR = 1e-3
 GAMMA = 0.99
 BATCH_SIZE = 256
@@ -60,18 +61,18 @@ def train_sac(task_name: str) -> tuple[float, int]:
         obs_dim=obs_dim, action_dim=action_dim,
         action_low=action_low, action_high=action_high,
         hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
-        activation=ACTIVATION,
+        activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
     ).to(device)
 
     q1 = ContinuousQCritic(
         feature_dim=obs_dim, action_dim=action_dim,
         hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
-        activation=ACTIVATION,
+        activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
     ).to(device)
     q2 = ContinuousQCritic(
         feature_dim=obs_dim, action_dim=action_dim,
         hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
-        activation=ACTIVATION,
+        activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
     ).to(device)
     critic = TwinQCritic(q1, q2).to(device)
     critic_target = TargetNetwork(critic, mode="polyak", tau=TAU).to(device)
