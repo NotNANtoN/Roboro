@@ -1,12 +1,14 @@
 """Unified RL training: shared SAC hyperparameters across Hopper and Walker2d.
 
 THIS FILE IS MODIFIED BY THE AUTORESEARCH AGENT.
-Custom loop: LN + target net, delayed actor, fast custom buffer.
+Custom loop: LN + target net, delayed actor, fast buffer, ortho init.
+Robust: catches timeouts and still prints partial results.
 """
 
 import os
 import sys
 import time
+import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -21,7 +23,7 @@ from roboro.critics.q import ContinuousQCritic, TwinQCritic
 from roboro.critics.target import TargetNetwork
 from roboro.actors.squashed_gaussian import SquashedGaussianActor
 
-from prepare import TASKS, evaluate, print_summary, start_timer, check_time
+from prepare import TASKS, evaluate, print_summary, start_timer, check_time, TimeLimitExceeded
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SHARED HYPERPARAMETERS
@@ -90,6 +92,16 @@ class FastReplayBuffer:
 # ═════════════════════════════════════════════════════════════════════════════
 # TRAINING
 # ═════════════════════════════════════════════════════════════════════════════
+def make_policy_fn(actor, device):
+    """Create eval policy function from current actor weights."""
+    def policy_fn(o):
+        with torch.no_grad():
+            o_t = torch.as_tensor(o, dtype=torch.float32, device=device).unsqueeze(0)
+            a, _ = actor.act(o_t, deterministic=True)
+            return a.squeeze(0).cpu().numpy()
+    return policy_fn
+
+
 def train_sac(task_name: str) -> tuple[float, int]:
     task = TASKS[task_name]
     set_seed(SEED)
@@ -120,7 +132,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
     ).to(device)
     critic = TwinQCritic(q1, q2).to(device)
 
-    # Orthogonal init: preserves gradient norms better than Kaiming (PPO-style)
+    # Orthogonal init
     def ortho_init(module, gain=np.sqrt(2)):
         for m in module.modules():
             if isinstance(m, nn.Linear):
@@ -129,7 +141,6 @@ def train_sac(task_name: str) -> tuple[float, int]:
                     nn.init.constant_(m.bias, 0.0)
     ortho_init(critic)
     ortho_init(actor.trunk)
-    # Small init for actor output heads (stable start)
     for head in [actor.mean_head, actor.log_std_head]:
         nn.init.orthogonal_(head.weight, gain=0.01)
         nn.init.constant_(head.bias, 0.0)
@@ -199,26 +210,33 @@ def train_sac(task_name: str) -> tuple[float, int]:
 
             critic_target.update()
 
-    def policy_fn(o):
-        with torch.no_grad():
-            o_t = torch.as_tensor(o, dtype=torch.float32, device=device).unsqueeze(0)
-            a, _ = actor.act(o_t, deterministic=True)
-            return a.squeeze(0).cpu().numpy()
-
-    eval_return = evaluate(task.env_id, policy_fn, task.eval_episodes, task.eval_seed)
+    eval_return = evaluate(task.env_id, make_policy_fn(actor, device),
+                           task.eval_episodes, task.eval_seed)
     n_params = sum(p.numel() for p in actor.parameters()) + \
                sum(p.numel() for p in critic.parameters())
     env.close()
+    print(f"[{task_name}] eval={eval_return:.1f} steps={step} gs={grad_steps}", flush=True)
     return eval_return, n_params
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# MAIN — catches timeouts and still prints partial results
+# ═════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     start_timer()
 
-    hopper_return, np_h = train_sac("hopper")
-    check_time()
-    walker_return, np_w = train_sac("walker")
-    total_time = check_time()
+    hopper_return = 0.0
+    walker_return = 0.0
+    np_h = np_w = 0
+
+    try:
+        hopper_return, np_h = train_sac("hopper")
+        check_time()
+        walker_return, np_w = train_sac("walker")
+        total_time = check_time()
+    except (TimeLimitExceeded, SystemExit) as e:
+        print(f"\n!!! TIMEOUT — printing partial results !!!", flush=True)
+        total_time = 600.0
 
     print_summary(
         hopper_return=hopper_return, walker_return=walker_return,
