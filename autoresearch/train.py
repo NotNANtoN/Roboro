@@ -119,6 +119,21 @@ def train_sac(task_name: str) -> tuple[float, int]:
         activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
     ).to(device)
     critic = TwinQCritic(q1, q2).to(device)
+
+    # Orthogonal init: preserves gradient norms better than Kaiming (PPO-style)
+    def ortho_init(module, gain=np.sqrt(2)):
+        for m in module.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=gain)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+    ortho_init(critic)
+    ortho_init(actor.trunk)
+    # Small init for actor output heads (stable start)
+    for head in [actor.mean_head, actor.log_std_head]:
+        nn.init.orthogonal_(head.weight, gain=0.01)
+        nn.init.constant_(head.bias, 0.0)
+
     critic_target = TargetNetwork(critic, mode="polyak", tau=TAU).to(device)
 
     buffer = FastReplayBuffer(BUFFER_CAPACITY, obs_dim, action_dim, seed=SEED)
