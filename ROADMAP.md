@@ -75,20 +75,41 @@ Beyond the Monitor, integrate WandB into the training recipes:
 - [ ] Eval video logging
 - [ ] Comparison tables (algo × env × seed)
 
+### 6. Findings from Autoresearch (March 2026)
+
+100 autonomous experiments across CartPole+Pendulum and Hopper+Walker2d surfaced concrete improvements and process gaps. See `autoresearch/BLOG.md` for the full write-up.
+
+**Library improvements to integrate:**
+
+- [ ] **Orthogonal init option in `NetworkCfg`** — biggest single win in the MuJoCo campaign (+30% score). Should be `init: str = "kaiming"  # "kaiming" | "orthogonal"` with configurable gain
+- [ ] **Expose `use_layer_norm` in presets** — LayerNorm was critical for stable UTD≥1 training (XQC-style). SAC/TD3 presets should default to `use_layer_norm=True`
+- [ ] **Fast replay buffer alternative** — the terminal-obs optimization in `ReplayBuffer` adds overhead; a simpler explicit-storage buffer was 170s faster over 200k samples. Consider offering both or benchmarking the tradeoff
+- [ ] **`max_grad_norm` for SAC/TD3** — already in DQN update but missing from continuous algorithms. Needed for stability experiments
+- [ ] **UTD ratio as a `TrainCfg` parameter** — `train_freq` only supports UTD≤1. Add a `utd_ratio: int = 1` field for multiple gradient steps per env step
+- [ ] **Delayed actor updates in SAC** — `actor_delay` is in TD3 config but not SAC. The autoresearch campaign showed `actor_delay=2` consistently helps SAC too
+
+**Process improvements for autoresearch v2:**
+
+- [ ] **Per-step metric logging from experiment 1** — critic loss, actor loss, alpha, Q-values, episode returns, gradient norms to CSV. The agent ran blind for 60 experiments
+- [ ] **Auto-diagnostics between runs** — plot learning curves after each experiment, detect divergence/plateau before the full run completes
+- [ ] **Failure mode clustering** — track *why* experiments failed (timeout, divergence, capacity, etc.) to avoid repeating the same class of mistake
+- [ ] **Causal ablations** — when something works, automatically run single-factor ablations to confirm which component mattered
+- [ ] **GPU time budget** — CPU bottleneck prevented UTD>1 entirely. On GPU, UTD=4-20 is the proven path to sample efficiency (XQC, REDQ, DroQ)
+
 ---
 
 ## Backlog
 
 ### Algorithms
 
-- [ ] **PER** (Prioritized Experience Replay) — TD-error-proportional sampling
-- [ ] **N-step returns** — multi-step TD targets in the replay buffer
+- [ ] **PER** (Prioritized Experience Replay) — TD-error-proportional sampling *(tested in autoresearch: hurt SAC due to interaction with entropy tuning; may work better for DQN)*
+- [ ] **N-step returns** — multi-step TD targets in the replay buffer *(tested in autoresearch: amplifies Q-value bias at low step budgets; helps Walker2d but hurts Hopper)*
 - [ ] **Dueling DQN** — separate value/advantage streams
 - [ ] **NoisyNets** — learned exploration (replacing ε-greedy)
 - [ ] **CQL** (Conservative Q-Learning) — offline RL, conservative Q penalty
 - [ ] **IQL** (Implicit Q-Learning) — offline RL, expectile regression
 - [ ] **TD3+BC** — offline RL, TD3 with behavioral cloning regularization
-- [ ] **CrossQ** — SAC without target networks (BatchNorm in Q-networks)
+- [ ] **CrossQ** — SAC without target networks (BatchNorm in Q-networks) *(tested in autoresearch: hurt Walker2d, BatchNorm interacts poorly with orthogonal init; needs more investigation)*
 
 ### Model-Based RL
 
