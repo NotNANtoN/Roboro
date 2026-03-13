@@ -1,0 +1,41 @@
+commit	score	cartpole	pendulum	time_s	status	description
+836fea8	0.6734	216.50	-137.81	86.4	keep	baseline DQN+SAC
+8523827	0.5551	92.85	-120.71	107.1	discard	exp1: faster eps, huber, lr=1e-3, batch=256
+e59a2f1	0.0000	0.00	0.00	300.0	crash	exp2: UTD=4 hidden=256 timed out
+5d671f3	0.4642	9.40	-144.59	230.7	discard	exp3: UTD=2 huber faster-eps
+c946e51	0.6517	194.80	-137.81	140.5	discard	exp4: faster eps decay 10k
+b97aaed	0.7985	336.80	-122.54	148.4	keep	exp5: layer norm all networks
+4293517	0.9617	500.00	-122.71	136.7	keep	exp6: LR=1e-3 with layer norm
+2177dd2	0.9620	500.00	-121.69	141.2	keep	exp7: init_alpha=0.1
+ba91036	0.9411	479.55	-123.13	183.8	discard	exp8: GELU activation
+2a3e3dc	0.9609	500.00	-125.15	161.0	discard	exp9: gamma=0.98
+65f50df	0.9600	500.00	-127.98	244.7	discard	exp10: 3 layers
+3b8907e	0.9616	500.00	-123.02	175.5	discard	exp11: tau=0.01 warmup=500
+e1d3893	0.9620	500.00	-121.69	332.9	crash	exp12: UTD=2 pendulum timeout
+1b2af99	0.6078	145.05	-119.19	162.8	discard	exp13: buffer=20k hurt CartPole
+a01974b	0.7355	273.15	-120.57	167.6	discard	exp14: n-step=3 hurt CartPole
+a82f9f4	0.9616	500.00	-122.99	170.0	discard	exp15: alpha_lr=3e-3 init_alpha=0.05
+cf8df75	0.8257	363.55	-120.98	140.5	discard	exp16: AdamW weight_decay hurt CartPole
+21f7f8f	0.7022	240.50	-122.67	157.3	discard	exp17: cosine LR hurt CartPole badly
+648ed8d	0.9626	500.00	-119.83	174.0	keep	exp18: fixed alpha=0.2 SAC
+edd52b7	0.9624	500.00	-120.43	139.3	discard	exp19: alpha=0.15 slightly worse
+695e055	0.9621	500.00	-121.15	182.3	discard	exp20: alpha=0.3 worse than 0.2
+c3c047d	0.9286	466.20	-120.39	177.7	discard	exp21: ortho init hurt CartPole
+f403dd6	0.7857	323.25	-120.04	147.6	discard	exp22: warmup=500 hurt CartPole
+2d6d979	0.9352	500.00	-207.38	176.7	discard	exp23: batch-norm critics hurt Pendulum
+e959a67	0.9626	500.00	-119.83	150.0	discard	exp24: grad clip no-op (post-step)
+5076444	0.7047	242.15	-119.83	215.2	discard	exp25: C51 hurt CartPole
+a9280d0	0.9624	500.00	-120.33	169.5	discard	exp26: SEED=0 slightly worse
+01818ec	0.9622	500.00	-120.84	179.5	discard	exp27: SAC grad clip slightly worse
+5b5afc2	0.9624	500.00	-120.20	171.1	discard	exp28: alpha=0.25
+9d42158	0.9625	500.00	-120.01	169.8	discard	exp29: batch=64
+429d1b7	0.7337	500.00	-852.09	137.4	discard	exp30: CrossQ no-target diverged
+fbb08fc	0.9627	500.00	-119.50	117.6	keep	exp31: delayed actor updates SAC
+893497b	0.9625	500.00	-120.02	115.9	discard	exp32: actor_delay=3
+96d0d2e	0.9623	500.00	-120.50	134.8	discard	exp33: batch=256
+0a83420	0.9603	500.00	-126.98	237.2	discard	exp34: mish slow and worse
+8fd8e10	0.9624	500.00	-120.39	111.3	discard	exp35: tau=0.01 delayed actor
+5a225ae	0.9626	500.00	-119.81	124.2	discard	exp36: target smoothing marginal
+e888d2b	0.9598	500.00	-128.64	113.1	discard	exp37: hard target hurt Pendulum
+8db12ae	0.9626	500.00	-119.65	144.4	discard	exp38: buffer seed SEED+1
+8688e3d	0.9626	500.00	-119.56	181.6	discard	exp39: SAC huber critic

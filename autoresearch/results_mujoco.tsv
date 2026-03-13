@@ -1,0 +1,61 @@
+commit	score	hopper	walker	time_s	status	description
+a41e3ca	0.0717	271.18	329.19	445.7	keep	baseline default SAC
+0398020	0.0000	0.00	0.00	605.0	crash	exp1: layernorm+UTD1+warmup1000 timeout
+9cf3cc6	0.0000	0.00	0.00	605.0	crash	exp2: LN+warmup1000+alpha0.1 timeout
+e5b1abb	0.0835	295.00	413.22	459.8	keep	exp3: warmup=1000 init_alpha=0.1
+d616448	0.0891	340.34	405.30	450.2	keep	exp4: LR=1e-3
+6728a27	0.0000	0.00	0.00	605.0	crash	exp5: BS=128 TF=1 timeout
+dcd765a	0.0899	323.91	435.90	446.6	keep	exp6: hidden=128 + layer norm
+061e56f	0.4348	2361.32	974.81	580.2	keep	exp7: custom loop critic-every-step actor-delay=2 LN+128
+cc63fc2	0.0000	0.00	0.00	605.0	crash	exp8: warmup=500 timeout (razor thin)
+5acd6cf	0.1173	540.77	400.38	479.7	discard	exp9: batch=128 actor_delay=3 hurt both
+c52af7d	0.0000	0.00	0.00	605.0	crash	exp10: nstep+tau0.01 timeout (extras overhead)
+b17bb8c	0.3545	2039.01	632.28	486.6	discard	exp12: CrossQ hurt Walker badly
+f4392e0	0.4780	2648.93	995.87	411.7	keep	exp13: fast buffer + warmup=500
+aac7fff	0.2329	854.98	1107.36	422.1	discard	exp14: warmup=256 too early hurt Hopper
+162f929	0.0000	0.00	0.00	684.4	crash	exp15: 3 layers timeout
+c4076a9	0.0895	192.25	620.08	595.3	discard	exp17: hd192+tau0.01 destabilized at scale
+97356b6	0.2506	772.41	1402.62	414.9	discard	exp18: alpha=0.05 killed Hopper
+2f6e245	0.0000	0.00	0.00	605.0	crash	exp19: UTD boost last 30k timeout
+3af85d6	0.3750	1890.77	1048.73	501.8	discard	exp21: tau0.007+gc1.0 hurt Hopper
+a9f157f	0.2098	1196.53	388.87	484.9	discard	exp22: obs normalization broke buffer consistency
+da41f4a	0.1779	251.26	1420.32	576.9	discard	exp23: Huber+rewNorm+buf30k — small buf killed Hopper
+0060f7e	0.0565	62.14	476.54	552.0	discard	exp24: Huber+rewNorm both hurt, non-stationary normalizer
+c7f39d2	0.0856	269.07	472.00	441.6	discard	exp25: symlog hurt — gradient compression too aggressive
+ca3060d	0.1198	552.94	407.76	421.0	discard	exp26: critic reset at 50k too destructive
+6f66026	0.0000	0.00	0.00	605.0	crash	exp27: UTD=2 timeout
+87b7411	0.1075	368.64	548.11	409.9	discard	exp28: avg Q overestimated, policy collapsed
+0ad788d	0.2116	416.93	1520.62	471.1	discard	exp29: uniform warmup hurt Hopper
+7754288	0.0000	0.00	0.00	605.0	crash	exp30: UTD last 10k timeout
+721e8c5	0.2766	1337.85	855.18	556.8	discard	exp31: UTD burst last 5k hurt both envs
+8f36177	0.0000	0.00	0.00	605.0	crash	exp32: spectral norm timeout
+f9a3164	0.6220	2954.76	1998.86	536.9	keep	exp33: orthogonal init — Walker doubled!
+a8012e9	0.1482	515.16	746.18	510.2	discard	exp34: AdamW wd=0.01 too aggressive
+4296ddb	0.4801	2583.35	1110.64	492.3	discard	exp35: critic warm-start delayed actor too much
+8f07d8e	0.1743	667.28	789.73	570.3	discard	exp36: Q-agreement loss fought twin Q diversity
+0451fff	0.3152	1747.75	654.91	484.8	discard	exp37: remove entropy from target broke exploration
+e323d0f	0.1338	586.51	500.34	519.3	discard	exp38: cosine LR decayed too fast for RL
+3db2afd	0.3693	2285.11	428.16	521.6	discard	exp39: critic output init too small, Q bootstrap too slow
+9863b1b	0.0000	0.00	0.00	605.0	crash	exp40: residual critic timeout (extra Linear overhead)
+0a16e1d	0.1707	832.30	518.37	504.3	discard	exp41: slow alpha_lr cant keep up
+5b5cb13	0.1929	409.45	1344.33	502.9	discard	exp42: actor clip 0.5 strangled Hopper
+58dbcc5	0.0000	0.00	0.00	605.0	crash	exp43: actor_delay=1 timeout
+dff1fe7	0.6220	2954.76	1998.86	494.7	discard	exp44: task order same score (deterministic seed)
+42f6b76	0.1160	458.04	506.13	485.6	discard	exp45: 500-step critic head-start still too disruptive
+9432bd6	0.0909	405.28	330.47	470.3	discard	exp46: SEED=0 much worse (high seed sensitivity)
+99596d6	0.1380	420.74	778.84	515.4	discard	exp47: factored critic too shallow
+774cd8a	0.4440	1359.34	2497.79	536.6	discard	exp48: gain=1.0 Walker+25% but Hopper-54%
+41c9e5d	0.2826	706.72	1816.25	570.4	discard	exp49: split gains — actor-critic mismatch
+47d768e	0.3215	949.68	1857.99	566.1	discard	exp50: reverse split also suboptimal
+d03f7d9	0.2498	911.76	1195.78	450.8	discard	exp51: fixed alpha cant adapt per-env like learnable
+7856289	0.0000	0.00	0.00	605.0	crash	exp52: hd64+UTD3 timeout, hopper only 907
+c2af362	0.2434	1319.67	548.58	561.9	discard	exp53: action repeat=2 reduced control precision
+187989e	0.0000	0.00	0.00	605.0	crash	exp54: PER timeout (O(N) normalization per call)
+739b8a1	0.1180	390.70	621.75	551.4	discard	exp55: PER disrupted SAC entropy tuning
+1f409e7	0.1251	679.03	280.59	594.3	discard	exp56: wider actor undertrained
+e531335	0.0000	0.00	0.00	605.0	crash	exp57: GELU critic timeout
+d493c0c	0.4040	1429.07	1998.86	551.4	discard	exp58: adaptive UTD briefly UTD=2 destabilized Hopper
+852b4d8	0.3194	676.93	2227.20	568.4	discard	exp59: gain=sqrt(1.5) still killed Hopper
+ce6dc47	0.2670	1869.08	0.00	600.0	discard	exp60/62: CrossQ+ortho worse Hopper, timeout Walker
+a49a235	0.3656	2142.58	595.25	486.5	discard	exp63: 3-step+ortho hurt both envs
+8440c10	0.3926	1049.47	2426.97	487.8	discard	exp64: 2-step helped Walker+21% but killed Hopper
