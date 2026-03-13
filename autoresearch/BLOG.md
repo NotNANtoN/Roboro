@@ -98,4 +98,26 @@ SAC + LayerNorm (critic & actor)
 
 ---
 
+---
+
+## Retrospective: What the Agent Got Wrong
+
+The numbers speak for themselves, but the *process* had clear weaknesses worth acknowledging:
+
+**1. It ran blind.** The agent only looked at the final score — never at learning curves, Q-value dynamics, episode lengths over time, or gradient norms. A human researcher would plot the critic loss at step 50k and immediately see if something was diverging. The agent waited 10 minutes to learn what a 30-second diagnostic plot could have revealed. Future versions need automated logging + analysis between runs.
+
+**2. It stopped being creative too early.** After ~30 experiments, the agent started repeating the same class of ideas (hyperparameter tweaks, UTD attempts). It never generated genuinely novel algorithmic ideas like learned loss functions, meta-learning the update rule, or curriculum strategies. The search was wide but shallow.
+
+**3. It couldn't introspect on WHY things failed.** When n-step returns scored 0.09, the agent's diagnosis was "amplifies bias." But it never looked at the actual Q-values to confirm. When ortho init scored 0.62, it couldn't explain *why* that specific random seed + init combination worked. The reasoning was post-hoc rationalization, not causal analysis.
+
+**4. No iterative logging infrastructure.** The agent should have built per-step metric logging from experiment 1 — critic loss, actor loss, alpha, Q-values, episode returns, gradient norms. Instead it flew blind for 60 experiments. The `runs/` directory mentioned in `program.md` was never used.
+
+## What to Improve for v2
+
+- **Automatic diagnostics**: dump per-step metrics to CSV, auto-plot between runs, detect divergence/plateau early
+- **Smarter search**: cluster failed experiments by failure mode, avoid repeating the same class of mistake
+- **Causal analysis**: when something works, run ablations to understand which component mattered
+- **Integrate findings into Roboro**: orthogonal init should be a first-class option in the library's `NetworkCfg`
+- **GPU support**: the entire campaign was bottlenecked by CPU compute. On GPU, UTD=20 would likely push past 0.9
+
 *Built with [Roboro](../README.md). Experiments run on Apple M-series CPU, March 2026.*

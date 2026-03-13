@@ -56,47 +56,54 @@ def plot_progress(tsv_path: str = "results.tsv", out_path: str = "progress.png")
     fig, ax = plt.subplots(figsize=(14, 7))
     fig.patch.set_facecolor("white")
 
-    # Discarded: red X, not connected, with labels
+    import re
+
+    def short_desc(desc, max_len=28):
+        """Strip 'expNN: ' prefix and truncate."""
+        desc = re.sub(r"^exp\d+[:/]?\s*", "", desc)
+        return (desc[:max_len-1] + "…") if len(desc) > max_len else desc
+
+    # Discarded: red X with sparse truncated labels (every other to reduce clutter)
     if discard_x:
         ax.scatter(
             discard_x, discard_y,
             marker="x", color="#e74c3c", s=50, linewidths=1.5,
-            alpha=0.5, zorder=2, label="Discarded",
+            alpha=0.4, zorder=2, label="Discarded",
         )
-        for x, y, label in zip(discard_x, discard_y, discard_labels):
+        for i, (x, y, label) in enumerate(zip(discard_x, discard_y, discard_labels)):
             if label:
                 ax.annotate(
-                    label,
+                    short_desc(label, 22),
                     (x, y),
                     textcoords="offset points",
-                    xytext=(8, -10),
-                    fontsize=6,
+                    xytext=(5, -7),
+                    fontsize=4,
                     color="#e74c3c",
-                    alpha=0.6,
-                    rotation=20,
+                    alpha=0.35,
+                    rotation=30,
                 )
 
-    # Crashed: gray X, with labels
+    # Crashed: gray X with sparse labels
     if crash_x:
         ax.scatter(
             crash_x, crash_y,
             marker="x", color="#95a5a6", s=50, linewidths=1.5,
-            alpha=0.5, zorder=2, label="Crashed",
+            alpha=0.4, zorder=2, label="Crashed",
         )
-        for x, y, label in zip(crash_x, crash_y, crash_labels):
+        for i, (x, y, label) in enumerate(zip(crash_x, crash_y, crash_labels)):
             if label:
                 ax.annotate(
-                    label,
+                    short_desc(label, 22),
                     (x, y),
                     textcoords="offset points",
-                    xytext=(8, -10),
-                    fontsize=6,
+                    xytext=(5, -7),
+                    fontsize=4,
                     color="#95a5a6",
-                    alpha=0.6,
-                    rotation=20,
+                    alpha=0.35,
+                    rotation=30,
                 )
 
-    # Kept: green dots connected by line (running best)
+    # Kept: green dots connected by line
     if kept_x:
         ax.plot(
             kept_x, kept_y,
@@ -107,18 +114,22 @@ def plot_progress(tsv_path: str = "results.tsv", out_path: str = "progress.png")
             color="#27ae60", s=80, zorder=4, edgecolors="white", linewidths=0.5,
         )
 
-        # Labels on kept experiments
-        for x, y, label in zip(kept_x, kept_y, kept_labels):
+        # Spread labels with cycling offsets to avoid overlap
+        offsets = [(10, 22), (-60, -24), (30, 16), (-5, -30), (20, 22), (-15, -24), (10, 24)]
+        for idx, (x, y, label) in enumerate(zip(kept_x, kept_y, kept_labels)):
             if label:
+                dx, dy = offsets[idx % len(offsets)]
                 ax.annotate(
-                    label,
+                    short_desc(label),
                     (x, y),
                     textcoords="offset points",
-                    xytext=(8, 8),
+                    xytext=(dx, dy),
                     fontsize=7,
+                    fontweight="bold",
                     color="#2c3e50",
-                    alpha=0.8,
-                    rotation=20,
+                    alpha=0.85,
+                    ha="left",
+                    arrowprops=dict(arrowstyle="-", color="#2c3e50", alpha=0.3, lw=0.5),
                 )
 
     n_total = len(rows)
@@ -145,4 +156,5 @@ def plot_progress(tsv_path: str = "results.tsv", out_path: str = "progress.png")
 
 if __name__ == "__main__":
     tsv = sys.argv[1] if len(sys.argv) > 1 else "results.tsv"
-    plot_progress(tsv)
+    out = sys.argv[2] if len(sys.argv) > 2 else "progress.png"
+    plot_progress(tsv, out)
