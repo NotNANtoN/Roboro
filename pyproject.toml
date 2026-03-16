@@ -44,8 +44,8 @@ atari = [
     "ale-py>=0.9",
 ]
 dmc = [
-    "dm-control>=1.0.10",
-    "shimmy[dm-control]>=2.0",
+    "dm-control>=1.0.38",
+    "mujoco>=3.6.0",
 ]
 dev = [
     "pytest>=8.0",
