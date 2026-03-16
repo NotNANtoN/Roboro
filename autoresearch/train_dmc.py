@@ -39,13 +39,14 @@ ACTIVATION = "relu"
 USE_LAYER_NORM = True
 LR = 1e-3
 GAMMA = 0.99
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 BUFFER_CAPACITY = 100_000
-WARMUP_STEPS = 1000
+WARMUP_STEPS = 512
 ACTOR_DELAY = 2
 TAU = 0.005
+TRAIN_FREQ = 2
 
-INIT_ALPHA = 0.1
+INIT_ALPHA = 1.0
 LEARNABLE_ALPHA = True
 
 
@@ -211,7 +212,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
             obs, _ = env.reset()
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
 
-        if step >= WARMUP_STEPS and len(buffer) >= BATCH_SIZE:
+        if step >= WARMUP_STEPS and len(buffer) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
             b_obs, b_act, b_rew, b_nobs, b_done = buffer.sample(BATCH_SIZE)
             alpha = log_alpha.exp()
             grad_steps += 1
