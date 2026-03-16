@@ -48,6 +48,8 @@ TRAIN_FREQ = 1
 
 INIT_ALPHA = 0.1
 LEARNABLE_ALPHA = True
+TARGET_ENTROPY_SCALE = 0.5
+ALPHA_MIN = 0.01
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -184,7 +186,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
     if LEARNABLE_ALPHA:
         log_alpha = nn.Parameter(log_alpha)
     alpha_opt = torch.optim.Adam([log_alpha], lr=LR) if LEARNABLE_ALPHA else None
-    target_entropy = -float(action_dim)
+    target_entropy = -float(action_dim) * TARGET_ENTROPY_SCALE
 
     metrics = MetricsLogger()
 
@@ -240,6 +242,8 @@ def train_sac(task_name: str) -> tuple[float, int]:
                     alpha_opt.zero_grad()
                     al.backward()
                     alpha_opt.step()
+                    with torch.no_grad():
+                        log_alpha.clamp_(min=np.log(ALPHA_MIN))
 
                 last_metrics = {
                     "critic_loss": c_loss.item(),
