@@ -50,6 +50,7 @@ INIT_ALPHA = 0.1
 LEARNABLE_ALPHA = True
 TARGET_ENTROPY_SCALE = 0.5
 ALPHA_MIN = 0.01
+ACTION_REPEAT = 2
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -195,34 +196,49 @@ def train_sac(task_name: str) -> tuple[float, int]:
     ep_reward = 0.0
     ep_count = 0
     grad_steps = 0
+    decisions = 0
+    env_steps = 0
     last_metrics = {}
 
-    for step in range(1, task.step_budget + 1):
+    while env_steps < task.step_budget:
         action, _ = actor.act(obs_t)
         act_np = action.squeeze(0).cpu().numpy()
-        next_obs, reward, terminated, truncated, _ = env.step(act_np)
-        ep_reward += float(reward)
+        decision_obs = obs
 
-        buffer.add(obs, act_np, float(reward), next_obs, terminated)
+        repeat_reward = 0.0
+        done = False
+        for _ in range(ACTION_REPEAT):
+            next_obs, reward, terminated, truncated, _ = env.step(act_np)
+            repeat_reward += float(reward)
+            ep_reward += float(reward)
+            env_steps += 1
+            done = terminated or truncated
+            if done or env_steps >= task.step_budget:
+                break
+
+        buffer.add(decision_obs, act_np, repeat_reward, next_obs, terminated)
+        decisions += 1
 
         obs = next_obs
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
 
-        if terminated or truncated:
+        if done:
             ep_count += 1
             ep_reward = 0.0
             obs, _ = env.reset()
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
 
-        if step >= WARMUP_STEPS and len(buffer) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
+        warmup_decisions = WARMUP_STEPS // ACTION_REPEAT
+        if decisions >= warmup_decisions and len(buffer) >= BATCH_SIZE and decisions % TRAIN_FREQ == 0:
             b_obs, b_act, b_rew, b_nobs, b_done = buffer.sample(BATCH_SIZE)
             alpha = log_alpha.exp()
             grad_steps += 1
 
+            gamma_eff = GAMMA ** ACTION_REPEAT
             with torch.no_grad():
                 na, nlp = actor(b_nobs)
                 tq = critic_target(b_nobs, na)
-                soft_t = b_rew + GAMMA * (~b_done).float() * (tq - alpha * nlp)
+                soft_t = b_rew + gamma_eff * (~b_done).float() * (tq - alpha * nlp)
             q1v, q2v = critic.both(b_obs, b_act)
             c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
             critic_opt.zero_grad()
@@ -256,18 +272,17 @@ def train_sac(task_name: str) -> tuple[float, int]:
 
             critic_target.update()
 
-            # Log metrics every 1000 gradient steps
             if grad_steps % 1000 == 0 and last_metrics:
-                metrics.log(step, grad_steps=grad_steps, ep_count=ep_count, **last_metrics)
+                metrics.log(env_steps, grad_steps=grad_steps, ep_count=ep_count, **last_metrics)
 
-        # Print diagnostics every 20k env steps
-        if step % 20000 == 0:
+        if env_steps % 20000 < ACTION_REPEAT and env_steps >= 20000:
             alpha_val = log_alpha.exp().item()
             q_str = f"q={last_metrics.get('q_mean', 0):.1f}" if last_metrics else "q=n/a"
             cl_str = f"cl={last_metrics.get('critic_loss', 0):.3f}" if last_metrics else "cl=n/a"
-            print(f"[{task_name}] step={step} gs={grad_steps} eps={ep_count} "
+            print(f"[{task_name}] step={env_steps} gs={grad_steps} eps={ep_count} "
                   f"alpha={alpha_val:.4f} {q_str} {cl_str} "
                   f"elapsed={check_time():.0f}s", flush=True)
+    step = env_steps
 
     # Dump metrics CSV
     metrics.dump(f"runs/{task_name}_metrics.csv")

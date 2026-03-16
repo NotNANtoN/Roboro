@@ -3,3 +3,5 @@ eca4100	0.0870	173.92	0.00	600.0	crash	timeout	baseline SAC 256-dim, timed out o
 6b19b6b	0.0896	179.12	0.00	600.0	crash	timeout	HIDDEN_DIM=128 still timed out, only 13pct faster
 7237788	0.0377	74.09	1.39	246.5	discard	instability	batch=128+train_freq=2+alpha=1.0: half UTD killed quality, Q overestimation
 dd4023c	0.0601	118.46	1.81	542.1	discard	exploration	hidden=128+batch=128: cheetah lost capacity, humanoid alpha collapse
+b725d91	0.0976	193.71	1.40	590.7	keep	n/a	alpha_min=0.01+target_ent*0.5: cheetah best yet, humanoid still nothing
+4bf3f1b	0.0053	9.28	1.42	493.9	discard	exploration	alpha_min=0.05 too high: cheetah collapsed to 9, humanoid unchanged
