@@ -5,3 +5,4 @@ eca4100	0.0870	173.92	0.00	600.0	crash	timeout	baseline SAC 256-dim, timed out o
 dd4023c	0.0601	118.46	1.81	542.1	discard	exploration	hidden=128+batch=128: cheetah lost capacity, humanoid alpha collapse
 b725d91	0.0976	193.71	1.40	590.7	keep	n/a	alpha_min=0.01+target_ent*0.5: cheetah best yet, humanoid still nothing
 4bf3f1b	0.0053	9.28	1.42	493.9	discard	exploration	alpha_min=0.05 too high: cheetah collapsed to 9, humanoid unchanged
+8deb96c	0.1093	217.38	1.17	245.2	keep	n/a	action_repeat=2: cheetah best 217, humanoid still 0, 245s
