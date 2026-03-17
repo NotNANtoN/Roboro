@@ -38,7 +38,8 @@ N_LAYERS = 2
 ACTIVATION = "relu"
 USE_LAYER_NORM = True
 LR = 5e-3
-GAMMA = 0.99
+GAMMA = 0.995
+MAX_GRAD_NORM = 1.0
 BATCH_SIZE = 128
 BUFFER_CAPACITY = 100_000
 WARMUP_STEPS = 512
@@ -245,6 +246,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
             c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
             critic_opt.zero_grad()
             c_loss.backward()
+            nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
             critic_opt.step()
 
             if grad_steps % ACTOR_DELAY == 0:
@@ -253,6 +255,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 a_loss = (alpha.detach() * lp - qp).mean()
                 actor_opt.zero_grad()
                 a_loss.backward()
+                nn.utils.clip_grad_norm_(actor.parameters(), MAX_GRAD_NORM)
                 actor_opt.step()
 
                 if LEARNABLE_ALPHA and alpha_opt is not None:
