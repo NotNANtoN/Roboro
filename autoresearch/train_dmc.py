@@ -30,7 +30,7 @@ from prepare_dmc import TASKS, evaluate, print_summary, start_timer, check_time,
 # ═════════════════════════════════════════════════════════════════════════════
 # SHARED HYPERPARAMETERS — must work for BOTH cheetah-run and humanoid-walk
 # ═════════════════════════════════════════════════════════════════════════════
-SEED = 42
+SEED = int(os.environ.get("SEED", 42))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 HIDDEN_DIM = 256
