@@ -154,3 +154,29 @@ class SquashedGaussianActor(BaseActor):
 
         action = self._scale_action(tanh_u)
         return action, log_prob
+
+    def evaluate_log_prob(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """Compute log pi(a|s) for a *given* action (not sampled).
+
+        Inverts the scaling + tanh squashing to recover the pre-squash ``u``,
+        then evaluates the Gaussian log-prob and applies the tanh Jacobian
+        correction — mirroring the formula in ``forward``.
+
+        Args:
+            obs: ``(B, obs_dim)``
+            action: ``(B, action_dim)`` in ``[action_low, action_high]``.
+
+        Returns:
+            log_probs: ``(B,)`` log-probability of each given action under the
+            current policy.
+        """
+        mean, std = self._get_distribution(obs)
+        # Undo scaling: a = low + (tanh_u + 1) * 0.5 * (high - low)
+        #   => tanh_u = 2 * (a - low) / (high - low) - 1
+        tanh_u = 2.0 * (action - self.action_low) / (self.action_high - self.action_low) - 1.0
+        # Clamp strictly inside (-1, 1) so atanh is finite.
+        tanh_u = tanh_u.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
+        u = torch.atanh(tanh_u)
+        log_prob = Normal(mean, std).log_prob(u)
+        log_prob = log_prob - torch.log(1.0 - tanh_u.pow(2) + 1e-6)
+        return log_prob.sum(dim=-1)

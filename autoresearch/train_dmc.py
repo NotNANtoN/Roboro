@@ -24,6 +24,7 @@ from roboro.core.seed import set_seed
 from roboro.critics.q import ContinuousQCritic, TwinQCritic
 from roboro.critics.target import TargetNetwork
 from roboro.actors.squashed_gaussian import SquashedGaussianActor
+from roboro.nn.blocks import MLPBlock
 
 from prepare_dmc import TASKS, evaluate, print_summary, start_timer, check_time, TimeLimitExceeded, make_dmc_env
 
@@ -53,6 +54,52 @@ LEARNABLE_ALPHA = True
 TARGET_ENTROPY_SCALE = 0.5
 ALPHA_MIN = 0.01
 ACTION_REPEAT = 2
+
+# Delightful Policy Gradient (DG) — gates actor loss by σ(A × surprisal).
+# Two-sample advantage: A = Q(s, a1) − Q(s, a2) with a1,a2 ~ π(·|s).
+# Whitening is essential here: raw Q scales are O(100), so without it the
+# sigmoid saturates and the gate collapses to 1 everywhere (DG becomes a no-op).
+# DG disabled by default: 3-seed cheetah sweep showed −20% return vs baseline.
+# Kept as env-var toggle (DG=1) for future experimentation.
+DG_ENABLED = bool(int(os.environ.get("DG", "0")))
+DG_ETA = float(os.environ.get("DG_ETA", "1.0"))
+DG_CLIP_SURPRISAL = 10.0
+DG_WHITEN = bool(int(os.environ.get("DG_WHITEN", "1")))
+DG_GATE_Q_ONLY = bool(int(os.environ.get("DG_GATE_Q_ONLY", "0")))  # Only gate -Q, not entropy
+CHEETAH_ONLY = bool(int(os.environ.get("CHEETAH_ONLY", "0")))
+
+# DQV-SAC: add a soft V network with Q bootstrapping on V.
+# Two variants controlled by DQV_BC:
+#
+#   DQV=1, DQV_BC=0 (pure DQV, off-policy-biased — collapsed in 3-seed test):
+#     V target: r - α·log π(a_replay|s) + γ·V_tgt(s')   [TD on V]
+#     Q target: r + γ·V_tgt(s')
+#
+#   DQV=1, DQV_BC=1 (bias-corrected, per Daley et al. BC-QVMAX):
+#     V target: min(Q1,Q2)(s, a~π) - α·log π(a~π|s)     [regression, no TD]
+#     Q target: r + γ·V_tgt(s')
+#
+# BC restores twin-Q pessimism (via min on Q for V's target) and removes
+# off-policy bias (V uses fresh policy samples, not replay actions).
+#
+# DQV_TWIN=1 adds a second V network: Q bootstraps on min(V1_tgt, V2_tgt).
+# This restores pessimism in the Q bootstrap, which BC-DQV was missing.
+DQV_ENABLED = bool(int(os.environ.get("DQV", "0")))
+DQV_BC = bool(int(os.environ.get("DQV_BC", "0")))
+DQV_TWIN = bool(int(os.environ.get("DQV_TWIN", "0")))
+
+# SAC-v1 style: add V as a side network for advantage estimates, but keep
+# standard SAC Q-learning (Q does NOT bootstrap on V). V just regresses to
+# soft-V = min(Q1,Q2)(s, a~π) - α·log π(a~π|s). Useful for DG experiments
+# where we want Q - V as a clean advantage signal.
+SACV1_ENABLED = bool(int(os.environ.get("SACV1", "0")))
+
+# Dueling SAC: Q(s,a) = V(s) + A(s,a) with shared trunk (RDQ-style).
+# Unlike DQV, there's no bootstrap chain — V and A are learned jointly.
+# L2 regularization on V and A for identifiability (can't shift constants).
+# Twin architecture: two (V,A) pairs, take min(Q1,Q2) for pessimism.
+DUELING_ENABLED = bool(int(os.environ.get("DUELING", "0")))
+DUELING_BETA = float(os.environ.get("DUELING_BETA", "0.01"))  # L2 reg weight
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -121,6 +168,59 @@ class MetricsLogger:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# DUELING CRITIC (RDQ-style for continuous actions)
+# ═════════════════════════════════════════════════════════════════════════════
+class DuelingCritic(nn.Module):
+    """Q(s,a) = V(s) + A(s,a) with shared trunk. RDQ-style L2 reg for identifiability."""
+
+    def __init__(self, obs_dim, action_dim, hidden_dim, n_layers, activation, use_layer_norm):
+        super().__init__()
+        self.trunk = MLPBlock(
+            in_dim=obs_dim, out_dim=hidden_dim, hidden_dim=hidden_dim,
+            n_layers=n_layers - 1, activation=activation,
+            output_activation=activation, use_layer_norm=use_layer_norm,
+        )
+        self.v_head = nn.Linear(hidden_dim, 1)
+        self.a_head = nn.Sequential(
+            nn.Linear(hidden_dim + action_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, obs, action):
+        feat = self.trunk(obs)
+        v = self.v_head(feat)
+        a = self.a_head(torch.cat([feat, action], dim=-1))
+        return (v + a).squeeze(-1)
+
+    def v_and_a(self, obs, action):
+        """Return V(s), A(s,a), Q(s,a) for L2 regularization."""
+        feat = self.trunk(obs)
+        v = self.v_head(feat).squeeze(-1)
+        a = self.a_head(torch.cat([feat, action], dim=-1)).squeeze(-1)
+        return v, a, v + a
+
+
+class TwinDuelingCritic(nn.Module):
+    """Twin dueling critics: min(Q1, Q2) for pessimism."""
+
+    def __init__(self, obs_dim, action_dim, hidden_dim, n_layers, activation, use_layer_norm):
+        super().__init__()
+        self.d1 = DuelingCritic(obs_dim, action_dim, hidden_dim, n_layers, activation, use_layer_norm)
+        self.d2 = DuelingCritic(obs_dim, action_dim, hidden_dim, n_layers, activation, use_layer_norm)
+
+    def forward(self, obs, action):
+        return torch.min(self.d1(obs, action), self.d2(obs, action))
+
+    def both(self, obs, action):
+        return self.d1(obs, action), self.d2(obs, action)
+
+    def both_with_va(self, obs, action):
+        """Return (v1, a1, q1), (v2, a2, q2) for L2 reg."""
+        return self.d1.v_and_a(obs, action), self.d2.v_and_a(obs, action)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # TRAINING
 # ═════════════════════════════════════════════════════════════════════════════
 def make_policy_fn(actor, device):
@@ -153,17 +253,35 @@ def train_sac(task_name: str) -> tuple[float, int]:
         activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
     ).to(device)
 
-    q1 = ContinuousQCritic(
-        feature_dim=obs_dim, action_dim=action_dim,
-        hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
-        activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
-    ).to(device)
-    q2 = ContinuousQCritic(
-        feature_dim=obs_dim, action_dim=action_dim,
-        hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
-        activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
-    ).to(device)
-    critic = TwinQCritic(q1, q2).to(device)
+    if DUELING_ENABLED:
+        critic = TwinDuelingCritic(
+            obs_dim=obs_dim, action_dim=action_dim,
+            hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
+            activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
+        ).to(device)
+    else:
+        q1 = ContinuousQCritic(
+            feature_dim=obs_dim, action_dim=action_dim,
+            hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
+            activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
+        ).to(device)
+        q2 = ContinuousQCritic(
+            feature_dim=obs_dim, action_dim=action_dim,
+            hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
+            activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
+        ).to(device)
+        critic = TwinQCritic(q1, q2).to(device)
+
+    # V network(s) for DQV-SAC or SAC-v1 (unused when both disabled).
+    # DQV_TWIN adds a second V for pessimism: Q bootstraps on min(V1_tgt, V2_tgt).
+    v_critic = MLPBlock(
+        in_dim=obs_dim, out_dim=1, hidden_dim=HIDDEN_DIM,
+        n_layers=N_LAYERS, activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
+    ).to(device) if (DQV_ENABLED or SACV1_ENABLED) else None
+    v_critic2 = MLPBlock(
+        in_dim=obs_dim, out_dim=1, hidden_dim=HIDDEN_DIM,
+        n_layers=N_LAYERS, activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
+    ).to(device) if (DQV_ENABLED and DQV_TWIN) else None
 
     # Orthogonal init — biggest single improvement from MuJoCo campaign
     def ortho_init(module, gain=np.sqrt(2)):
@@ -177,13 +295,21 @@ def train_sac(task_name: str) -> tuple[float, int]:
     for head in [actor.mean_head, actor.log_std_head]:
         nn.init.orthogonal_(head.weight, gain=0.01)
         nn.init.constant_(head.bias, 0.0)
+    if v_critic is not None:
+        ortho_init(v_critic)
+    if v_critic2 is not None:
+        ortho_init(v_critic2)
 
     critic_target = TargetNetwork(critic, mode="polyak", tau=TAU).to(device)
+    v_target = TargetNetwork(v_critic, mode="polyak", tau=TAU).to(device) if v_critic is not None else None
+    v_target2 = TargetNetwork(v_critic2, mode="polyak", tau=TAU).to(device) if v_critic2 is not None else None
 
     buffer = FastReplayBuffer(BUFFER_CAPACITY, obs_dim, action_dim, seed=SEED)
 
     actor_opt = torch.optim.Adam(actor.parameters(), lr=LR)
     critic_opt = torch.optim.Adam(critic.parameters(), lr=LR)
+    v_opt = torch.optim.Adam(v_critic.parameters(), lr=LR) if v_critic is not None else None
+    v_opt2 = torch.optim.Adam(v_critic2.parameters(), lr=LR) if v_critic2 is not None else None
 
     log_alpha = torch.tensor(float(INIT_ALPHA)).log()
     if LEARNABLE_ALPHA:
@@ -238,21 +364,168 @@ def train_sac(task_name: str) -> tuple[float, int]:
             grad_steps += 1
 
             gamma_eff = GAMMA ** ACTION_REPEAT
-            with torch.no_grad():
-                na, nlp = actor(b_nobs)
-                tq = critic_target(b_nobs, na)
-                soft_t = b_rew + gamma_eff * (~b_done).float() * (tq - alpha * nlp)
-            q1v, q2v = critic.both(b_obs, b_act)
-            c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
-            critic_opt.zero_grad()
-            c_loss.backward()
-            nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
-            critic_opt.step()
+            not_done = (~b_done).float()
+
+            if DUELING_ENABLED:
+                # Dueling SAC: Q(s,a) = V(s) + A(s,a) with L2 reg on V and A
+                # Standard SAC target, but critic is TwinDuelingCritic
+                with torch.no_grad():
+                    na, nlp = actor(b_nobs)
+                    tq = critic_target(b_nobs, na)
+                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha * nlp)
+
+                # Get V, A, Q from dueling critics
+                (v1, a1, q1v), (v2, a2, q2v) = critic.both_with_va(b_obs, b_act)
+
+                # TD loss + L2 regularization (RDQ-style)
+                td_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
+                l2_reg = (DUELING_BETA / 2) * (v1.pow(2).mean() + a1.pow(2).mean() +
+                                                v2.pow(2).mean() + a2.pow(2).mean())
+                c_loss = td_loss + l2_reg
+
+                critic_opt.zero_grad()
+                c_loss.backward()
+                nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
+                critic_opt.step()
+
+                v_loss = torch.tensor(0.0)  # no separate V network
+
+            elif DQV_ENABLED:
+                # DQV: Q bootstraps on V
+                #   Q target: r + γ·V_tgt(s')  [or min(V1_tgt, V2_tgt) if DQV_TWIN]
+                with torch.no_grad():
+                    v1_next = v_target(b_nobs).squeeze(-1)
+                    if DQV_TWIN:
+                        v2_next = v_target2(b_nobs).squeeze(-1)
+                        v_next = torch.min(v1_next, v2_next)
+                    else:
+                        v_next = v1_next
+                    q_t = b_rew + gamma_eff * not_done * v_next
+
+                q1v, q2v = critic.both(b_obs, b_act)
+                c_loss = F.mse_loss(q1v, q_t) + F.mse_loss(q2v, q_t)
+                critic_opt.zero_grad()
+                c_loss.backward()
+                nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
+                critic_opt.step()
+
+                # V target depends on BC mode
+                if DQV_BC:
+                    # BC-DQV: V regresses to soft-V implied by current Q (no TD, no off-policy bias)
+                    #   V_target = min(Q1,Q2)(s, a~π) - α·log π(a~π|s)
+                    with torch.no_grad():
+                        a_fresh, lp_fresh = actor(b_obs)
+                        q1_fresh, q2_fresh = critic.both(b_obs, a_fresh)
+                        q_min_fresh = torch.min(q1_fresh, q2_fresh)
+                        v_t = q_min_fresh - alpha * lp_fresh
+                else:
+                    # Pure DQV (off-policy-biased): V bootstraps via TD
+                    #   V_target = r - α·log π(a_replay|s) + γ·V_tgt(s')
+                    with torch.no_grad():
+                        logp_replay = actor.evaluate_log_prob(b_obs, b_act)
+                        v_t = b_rew - alpha * logp_replay + gamma_eff * not_done * v_next
+
+                # Update V1 (and V2 if twin)
+                v_pred = v_critic(b_obs).squeeze(-1)
+                v_loss = F.mse_loss(v_pred, v_t)
+                v_opt.zero_grad()
+                v_loss.backward()
+                nn.utils.clip_grad_norm_(v_critic.parameters(), MAX_GRAD_NORM)
+                v_opt.step()
+
+                if DQV_TWIN:
+                    v_pred2 = v_critic2(b_obs).squeeze(-1)
+                    v_loss2 = F.mse_loss(v_pred2, v_t)
+                    v_opt2.zero_grad()
+                    v_loss2.backward()
+                    nn.utils.clip_grad_norm_(v_critic2.parameters(), MAX_GRAD_NORM)
+                    v_opt2.step()
+
+                soft_t = q_t  # alias for logging
+
+            elif SACV1_ENABLED:
+                # SAC-v1: standard SAC Q-learning + V as side network for advantage
+                #   Q target: r + γ·(min(Q1_tgt, Q2_tgt)(s', a'~π) - α·log π(a'|s'))
+                #   V target: min(Q1,Q2)(s, a~π) - α·log π(a~π|s)  [regression, no TD]
+                with torch.no_grad():
+                    na, nlp = actor(b_nobs)
+                    tq = critic_target(b_nobs, na)
+                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha * nlp)
+
+                q1v, q2v = critic.both(b_obs, b_act)
+                c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
+                critic_opt.zero_grad()
+                c_loss.backward()
+                nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
+                critic_opt.step()
+
+                # V regresses to soft-V (same as BC-DQV's V target)
+                with torch.no_grad():
+                    a_fresh, lp_fresh = actor(b_obs)
+                    q1_fresh, q2_fresh = critic.both(b_obs, a_fresh)
+                    q_min_fresh = torch.min(q1_fresh, q2_fresh)
+                    v_t = q_min_fresh - alpha * lp_fresh
+
+                v_pred = v_critic(b_obs).squeeze(-1)
+                v_loss = F.mse_loss(v_pred, v_t)
+                v_opt.zero_grad()
+                v_loss.backward()
+                nn.utils.clip_grad_norm_(v_critic.parameters(), MAX_GRAD_NORM)
+                v_opt.step()
+
+            else:
+                # Standard SAC (no V network)
+                with torch.no_grad():
+                    na, nlp = actor(b_nobs)
+                    tq = critic_target(b_nobs, na)
+                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha * nlp)
+                q1v, q2v = critic.both(b_obs, b_act)
+                c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
+                critic_opt.zero_grad()
+                c_loss.backward()
+                nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
+                critic_opt.step()
+                v_loss = torch.tensor(0.0)
 
             if grad_steps % ACTOR_DELAY == 0:
                 ap, lp = actor(b_obs)
                 qp = critic(b_obs, ap)
-                a_loss = (alpha.detach() * lp - qp).mean()
+
+                if DG_ENABLED:
+                    with torch.no_grad():
+                        if DUELING_ENABLED:
+                            # Dueling gives us A directly: Q = V + A, so A = Q - V
+                            (v1, a1, _), (v2, a2, _) = critic.both_with_va(b_obs, ap)
+                            advantage = torch.min(a1, a2)  # Use min for consistency with twin-Q
+                        elif SACV1_ENABLED or DQV_ENABLED:
+                            # Use Q - V as advantage (lower variance, proper advantage estimate)
+                            v_baseline = v_critic(b_obs).squeeze(-1)
+                            advantage = qp.detach() - v_baseline
+                        else:
+                            # Fallback: two-sample Q - Q baseline (higher variance)
+                            ap2, _ = actor(b_obs)
+                            q_baseline = critic(b_obs, ap2)
+                            advantage = qp.detach() - q_baseline
+                        surprisal = (-lp.detach()).clamp(-DG_CLIP_SURPRISAL, DG_CLIP_SURPRISAL)
+                        delight = advantage * surprisal
+                        if DG_WHITEN:
+                            delight = (delight - delight.mean()) / (delight.std() + 1e-6)
+                        gate = torch.sigmoid(delight / DG_ETA)
+                    if DG_GATE_Q_ONLY:
+                        # Gate only -Q term, leave entropy ungated
+                        a_loss = (alpha.detach() * lp - gate * qp).mean()
+                    else:
+                        # Gate full actor loss (original DG)
+                        a_loss = (gate * (alpha.detach() * lp - qp)).mean()
+                    dg_gate_mean = gate.mean().item()
+                    dg_gate_std = gate.std().item()
+                    dg_delight_mean = delight.mean().item()
+                else:
+                    a_loss = (alpha.detach() * lp - qp).mean()
+                    dg_gate_mean = 1.0
+                    dg_gate_std = 0.0
+                    dg_delight_mean = 0.0
+
                 actor_opt.zero_grad()
                 a_loss.backward()
                 nn.utils.clip_grad_norm_(actor.parameters(), MAX_GRAD_NORM)
@@ -273,9 +546,18 @@ def train_sac(task_name: str) -> tuple[float, int]:
                     "q_mean": q1v.mean().item(),
                     "target_q_mean": soft_t.mean().item(),
                     "log_prob": lp.mean().item(),
+                    "dg_gate_mean": dg_gate_mean,
+                    "dg_gate_std": dg_gate_std,
+                    "dg_delight_mean": dg_delight_mean,
+                    "v_loss": v_loss.item(),
+                    "v_mean": v_pred.mean().item() if (DQV_ENABLED or SACV1_ENABLED) else 0.0,
                 }
 
             critic_target.update()
+            if v_target is not None:
+                v_target.update()
+            if v_target2 is not None:
+                v_target2.update()
 
             if grad_steps % 1000 == 0 and last_metrics:
                 metrics.log(env_steps, grad_steps=grad_steps, ep_count=ep_count, **last_metrics)
@@ -315,7 +597,8 @@ if __name__ == "__main__":
     try:
         cheetah_return, np_c = train_sac("cheetah")
         check_time()
-        humanoid_return, np_h = train_sac("humanoid")
+        if not CHEETAH_ONLY:
+            humanoid_return, np_h = train_sac("humanoid")
         total_time = check_time()
     except (TimeLimitExceeded, SystemExit) as e:
         print(f"\n!!! TIMEOUT — printing partial results !!!", flush=True)
