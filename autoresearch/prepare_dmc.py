@@ -102,6 +102,15 @@ TASKS = {
         min_return=0.0,
         description="SAC on humanoid-walk (21D action, high-dim balance + walk)",
     ),
+    "quadruped": TaskSpec(
+        env_id="quadruped-walk",
+        step_budget=100_000,
+        eval_episodes=20,
+        eval_seed=10_000,
+        max_return=1000.0,
+        min_return=0.0,
+        description="SAC on quadruped-walk (12D action, 78D obs)",
+    ),
 }
 
 TIME_LIMIT_SECONDS = 600  # 10 minutes total for both tasks combined

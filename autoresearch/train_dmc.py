@@ -7,6 +7,7 @@ buffer + delayed actor). HIDDEN_DIM=256 to handle humanoid's 67-dim obs / 21-dim
 v2 improvement: per-step metric logging to runs/ for post-run diagnostics.
 """
 
+import copy
 import csv
 import os
 import sys
@@ -26,7 +27,7 @@ from roboro.critics.target import TargetNetwork
 from roboro.actors.squashed_gaussian import SquashedGaussianActor
 from roboro.nn.blocks import MLPBlock
 
-from prepare_dmc import TASKS, evaluate, print_summary, start_timer, check_time, TimeLimitExceeded, make_dmc_env
+from prepare_dmc import TASKS, TaskSpec, evaluate, print_summary, start_timer, check_time, TimeLimitExceeded, make_dmc_env
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SHARED HYPERPARAMETERS — must work for BOTH cheetah-run and humanoid-walk
@@ -101,18 +102,58 @@ SACV1_ENABLED = bool(int(os.environ.get("SACV1", "0")))
 DUELING_ENABLED = bool(int(os.environ.get("DUELING", "0")))
 DUELING_BETA = float(os.environ.get("DUELING_BETA", "0.01"))  # L2 reg weight
 
+# SAT-SAC: State-Adaptive Temperature. Learn α(s) instead of scalar α.
+# Idea: explore more in hard states (low V), exploit in easy states (high V).
+# α_net: small MLP(obs_dim → 1) with softplus output to ensure α > 0.
+SAT_ENABLED = bool(int(os.environ.get("SAT", "0")))
+SAT_LR = float(os.environ.get("SAT_LR", "0.0001"))  # Lower LR for stability (default 1e-4 vs 3e-4)
+
+# RSAT-SAC: Residual State-Adaptive Temperature.
+# α(s) = α_scalar · (1 + ε·tanh(f(s)))  — bounded deviation from scalar base.
+# Fixes SAT's high variance by anchoring to proven scalar α.
+RSAT_ENABLED = bool(int(os.environ.get("RSAT", "0")))
+RSAT_EPS = float(os.environ.get("RSAT_EPS", "0.5"))  # Max ±50% deviation from scalar
+RSAT_LR = float(os.environ.get("RSAT_LR", "0.0001"))  # LR for residual network
+
+# UCB-SAC: Uncertainty-Based Curiosity temperature (Q-disagreement variant).
+# α(s,a) = α_base · (1 + β · |Q1-Q2| / (|Q_mean| + ε))
+UCB_ENABLED = bool(int(os.environ.get("UCB", "0")))
+UCB_BETA = float(os.environ.get("UCB_BETA", "1.0"))
+
+# TDE-SAC: TD-Error driven adaptive temperature.
+# α(s) = α_base · (1 + β · |TD_error(s)| / (|TD_mean| + ε))
+# Uses replay TD error magnitude as a per-state uncertainty signal.
+TDE_ENABLED = bool(int(os.environ.get("TDE", "0")))
+TDE_BETA = float(os.environ.get("TDE_BETA", "2.0"))  # TD errors are small relative to Q, so higher β
+
+# SPG-SAC: Sampled Policy Gradient actor update (Wiehe et al., 2018).
+# Replaces reparameterization-based actor gradient with sample-and-evaluate:
+#   1. Start with best = actor_mean(s)
+#   2. If Q(s, a_replay) > Q(s, best): best = a_replay
+#   3. Sample S actions around best with Gaussian noise, keep highest Q
+#   4. If Q(s, best) > Q(s, actor_mean(s)): regress actor toward best
+# Searches action space more globally than DPG-style backprop through Q.
+SPG_ENABLED = bool(int(os.environ.get("SPG", "0")))
+SPG_SAMPLES = int(os.environ.get("SPG_SAMPLES", "8"))   # Offline Gaussian samples per state
+SPG_NOISE = float(os.environ.get("SPG_NOISE", "0.3"))   # Std of Gaussian noise for sampling
+
+# Ensemble critics: N>2 Q-networks, use min over all for targets and actor.
+# First 2 networks always get same init as standard twin-Q (same seed).
+N_CRITICS = int(os.environ.get("N_CRITICS", "2"))
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # FAST REPLAY BUFFER
 # ═════════════════════════════════════════════════════════════════════════════
 class FastReplayBuffer:
     __slots__ = ('obs', 'actions', 'rewards', 'next_obs', 'dones',
-                 'pos', 'size', 'capacity', 'rng')
+                 'best_actions', 'pos', 'size', 'capacity', 'rng')
 
     def __init__(self, capacity, obs_dim, action_dim, seed=None):
         self.capacity = capacity
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
         self.actions = np.zeros((capacity, action_dim), dtype=np.float32)
+        self.best_actions = np.zeros((capacity, action_dim), dtype=np.float32)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=np.bool_)
@@ -124,21 +165,29 @@ class FastReplayBuffer:
         i = self.pos
         self.obs[i] = obs
         self.actions[i] = action
+        self.best_actions[i] = action  # SBA: init best to original action
         self.rewards[i] = reward
         self.next_obs[i] = next_obs
         self.dones[i] = done
         self.pos = (self.pos + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, return_indices=False):
         idx = self.rng.integers(0, self.size, size=batch_size)
-        return (
+        batch = (
             torch.from_numpy(self.obs[idx]),
             torch.from_numpy(self.actions[idx]),
             torch.from_numpy(self.rewards[idx]),
             torch.from_numpy(self.next_obs[idx]),
             torch.from_numpy(self.dones[idx]),
         )
+        if return_indices:
+            return (*batch, torch.from_numpy(self.best_actions[idx]), idx)
+        return batch
+
+    def update_best_actions(self, indices, new_best):
+        """SBA: update best-known actions (separate from original actions)."""
+        self.best_actions[indices] = new_best
 
     def __len__(self):
         return self.size
@@ -234,6 +283,14 @@ def make_policy_fn(actor, device):
 
 def train_sac(task_name: str) -> tuple[float, int]:
     task = TASKS[task_name]
+    steps_override = int(os.environ.get("STEPS", "0"))
+    if steps_override > 0:
+        task = TaskSpec(
+            env_id=task.env_id, step_budget=steps_override,
+            eval_episodes=task.eval_episodes, eval_seed=task.eval_seed,
+            max_return=task.max_return, min_return=task.min_return,
+            description=task.description,
+        )
     set_seed(SEED)
     device = torch.device(DEVICE)
 
@@ -270,7 +327,36 @@ def train_sac(task_name: str) -> tuple[float, int]:
             hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
             activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
         ).to(device)
-        critic = TwinQCritic(q1, q2).to(device)
+        if N_CRITICS > 2:
+            # Save RNG state so extra critics don't affect q1/q2 downstream init
+            rng_state = torch.get_rng_state()
+            extra_qs = []
+            for i in range(N_CRITICS - 2):
+                torch.manual_seed(SEED + 1000 + i)
+                eq = ContinuousQCritic(
+                    feature_dim=obs_dim, action_dim=action_dim,
+                    hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
+                    activation=ACTIVATION, use_layer_norm=USE_LAYER_NORM,
+                ).to(device)
+                extra_qs.append(eq)
+            torch.set_rng_state(rng_state)  # Restore so ortho_init matches N=2
+
+            class EnsembleCritic(nn.Module):
+                def __init__(self, q_list):
+                    super().__init__()
+                    self.qs = nn.ModuleList(q_list)
+                def forward(self, obs, action):
+                    return torch.stack([q(obs, action) for q in self.qs]).min(dim=0).values
+                def both(self, obs, action):
+                    vals = [q(obs, action) for q in self.qs]
+                    return vals[0], vals[1]  # For compatibility
+                def all_q(self, obs, action):
+                    return torch.stack([q(obs, action) for q in self.qs])  # (N, B)
+
+            critic = EnsembleCritic([q1, q2] + extra_qs).to(device)
+            print(f"[ensemble] Using {N_CRITICS} critics")
+        else:
+            critic = TwinQCritic(q1, q2).to(device)
 
     # V network(s) for DQV-SAC or SAC-v1 (unused when both disabled).
     # DQV_TWIN adds a second V for pessimism: Q bootstraps on min(V1_tgt, V2_tgt).
@@ -290,7 +376,17 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 nn.init.orthogonal_(m.weight, gain=gain)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
-    ortho_init(critic)
+    if N_CRITICS > 2 and not DUELING_ENABLED:
+        # Init q1/q2 first (same as twin-Q), then extras separately
+        ortho_init(critic.qs[0])
+        ortho_init(critic.qs[1])
+        rng_state2 = torch.get_rng_state()
+        for i, eq in enumerate(critic.qs[2:]):
+            torch.manual_seed(SEED + 2000 + i)
+            ortho_init(eq)
+        torch.set_rng_state(rng_state2)
+    else:
+        ortho_init(critic)
     ortho_init(actor.trunk)
     for head in [actor.mean_head, actor.log_std_head]:
         nn.init.orthogonal_(head.weight, gain=0.01)
@@ -311,10 +407,44 @@ def train_sac(task_name: str) -> tuple[float, int]:
     v_opt = torch.optim.Adam(v_critic.parameters(), lr=LR) if v_critic is not None else None
     v_opt2 = torch.optim.Adam(v_critic2.parameters(), lr=LR) if v_critic2 is not None else None
 
-    log_alpha = torch.tensor(float(INIT_ALPHA)).log()
-    if LEARNABLE_ALPHA:
-        log_alpha = nn.Parameter(log_alpha)
-    alpha_opt = torch.optim.Adam([log_alpha], lr=LR) if LEARNABLE_ALPHA else None
+    # Alpha (temperature) — scalar, SAT (unbounded), or RSAT (residual-bounded)
+    if RSAT_ENABLED:
+        # Residual SAT: α(s) = α_scalar · (1 + ε·tanh(f(s)))
+        # α_scalar is the standard learnable dual variable (stable anchor)
+        # f(s) learns bounded state-dependent corrections
+        log_alpha = nn.Parameter(torch.tensor(float(INIT_ALPHA)).log())
+        alpha_opt = torch.optim.Adam([log_alpha], lr=LR)
+        rsat_net = nn.Sequential(
+            nn.Linear(obs_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+        ).to(device)
+        nn.init.orthogonal_(rsat_net[0].weight, gain=0.1)
+        nn.init.zeros_(rsat_net[0].bias)
+        nn.init.orthogonal_(rsat_net[2].weight, gain=0.01)
+        nn.init.zeros_(rsat_net[2].bias)  # Start at tanh(0)=0, so α(s)=α_scalar initially
+        rsat_opt = torch.optim.Adam(rsat_net.parameters(), lr=RSAT_LR)
+        alpha_net = None  # unused
+    elif SAT_ENABLED:
+        # Original SAT: α(s) = softplus(alpha_net(s)) — unbounded
+        alpha_net = nn.Sequential(
+            nn.Linear(obs_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+        ).to(device)
+        nn.init.constant_(alpha_net[-1].bias, float(np.log(INIT_ALPHA)))
+        alpha_opt = torch.optim.Adam(alpha_net.parameters(), lr=SAT_LR)
+        log_alpha = None
+        rsat_net = None
+        rsat_opt = None
+    else:
+        alpha_net = None
+        rsat_net = None
+        log_alpha = torch.tensor(float(INIT_ALPHA)).log()
+        if LEARNABLE_ALPHA:
+            log_alpha = nn.Parameter(log_alpha)
+        alpha_opt = torch.optim.Adam([log_alpha], lr=LR) if LEARNABLE_ALPHA else None
+        rsat_opt = None
     target_entropy = -float(action_dim) * TARGET_ENTROPY_SCALE
 
     metrics = MetricsLogger()
@@ -359,8 +489,28 @@ def train_sac(task_name: str) -> tuple[float, int]:
         warmup_decisions = WARMUP_STEPS // ACTION_REPEAT
         if decisions >= warmup_decisions and len(buffer) >= BATCH_SIZE and decisions % TRAIN_FREQ == 0:
           for _utd in range(UTD):
-            b_obs, b_act, b_rew, b_nobs, b_done = buffer.sample(BATCH_SIZE)
-            alpha = log_alpha.exp()
+            if SPG_ENABLED:
+                b_obs, b_act, b_rew, b_nobs, b_done, b_best, b_idx = buffer.sample(BATCH_SIZE, return_indices=True)
+            else:
+                b_obs, b_act, b_rew, b_nobs, b_done = buffer.sample(BATCH_SIZE)
+            if RSAT_ENABLED:
+                # Residual SAT: α(s) = α_scalar · (1 + ε·tanh(f(s)))
+                alpha_scalar = log_alpha.exp()
+                alpha = alpha_scalar * (1.0 + RSAT_EPS * torch.tanh(rsat_net(b_obs)).squeeze(-1))
+                with torch.no_grad():
+                    alpha_next = alpha_scalar * (1.0 + RSAT_EPS * torch.tanh(rsat_net(b_nobs)).squeeze(-1))
+            elif SAT_ENABLED:
+                # Original SAT: α(s) = softplus(alpha_net(s)) — no clamp, let it learn freely
+                alpha = F.softplus(alpha_net(b_obs)).squeeze(-1)
+                with torch.no_grad():
+                    alpha_next = F.softplus(alpha_net(b_nobs)).squeeze(-1)
+            elif UCB_ENABLED:
+                # UCB: scalar base alpha for critic targets, modulated for actor later
+                alpha = log_alpha.exp()
+                alpha_next = alpha
+            else:
+                alpha = log_alpha.exp()
+                alpha_next = alpha
             grad_steps += 1
 
             gamma_eff = GAMMA ** ACTION_REPEAT
@@ -372,7 +522,8 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 with torch.no_grad():
                     na, nlp = actor(b_nobs)
                     tq = critic_target(b_nobs, na)
-                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha * nlp)
+                    # Use alpha_next for next-state entropy (SAT uses state-dependent α)
+                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha_next * nlp)
 
                 # Get V, A, Q from dueling critics
                 (v1, a1, q1v), (v2, a2, q2v) = critic.both_with_va(b_obs, b_act)
@@ -387,6 +538,9 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 c_loss.backward()
                 nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
                 critic_opt.step()
+
+                with torch.no_grad():
+                    td_err = ((q1v - soft_t).abs() + (q2v - soft_t).abs()) / 2.0
 
                 v_loss = torch.tensor(0.0)  # no separate V network
 
@@ -408,6 +562,9 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 c_loss.backward()
                 nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
                 critic_opt.step()
+
+                with torch.no_grad():
+                    td_err = ((q1v - q_t).abs() + (q2v - q_t).abs()) / 2.0
 
                 # V target depends on BC mode
                 if DQV_BC:
@@ -450,7 +607,7 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 with torch.no_grad():
                     na, nlp = actor(b_nobs)
                     tq = critic_target(b_nobs, na)
-                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha * nlp)
+                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha_next * nlp)
 
                 q1v, q2v = critic.both(b_obs, b_act)
                 c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
@@ -458,6 +615,9 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 c_loss.backward()
                 nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
                 critic_opt.step()
+
+                with torch.no_grad():
+                    td_err = ((q1v - soft_t).abs() + (q2v - soft_t).abs()) / 2.0
 
                 # V regresses to soft-V (same as BC-DQV's V target)
                 with torch.no_grad():
@@ -478,71 +638,213 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 with torch.no_grad():
                     na, nlp = actor(b_nobs)
                     tq = critic_target(b_nobs, na)
-                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha * nlp)
-                q1v, q2v = critic.both(b_obs, b_act)
-                c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
+                    soft_t = b_rew + gamma_eff * not_done * (tq - alpha_next * nlp)
+                if N_CRITICS > 2:
+                    all_qv = critic.all_q(b_obs, b_act)  # (N, B)
+                    c_loss = sum(F.mse_loss(all_qv[i], soft_t) for i in range(N_CRITICS))
+                    q1v, q2v = all_qv[0], all_qv[1]
+                else:
+                    q1v, q2v = critic.both(b_obs, b_act)
+                    c_loss = F.mse_loss(q1v, soft_t) + F.mse_loss(q2v, soft_t)
                 critic_opt.zero_grad()
                 c_loss.backward()
                 nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
                 critic_opt.step()
+                with torch.no_grad():
+                    td_err = ((q1v - soft_t).abs() + (q2v - soft_t).abs()) / 2.0
                 v_loss = torch.tensor(0.0)
 
+            spg_diag = {}
             if grad_steps % ACTOR_DELAY == 0:
                 ap, lp = actor(b_obs)
                 qp = critic(b_obs, ap)
 
-                if DG_ENABLED:
+                if SPG_ENABLED:
+                    # SPG: sample-and-evaluate actor update (Wiehe et al., 2018)
+                    # Batched: all S samples evaluated in one critic forward pass
+                    B = b_obs.shape[0]
+                    S = SPG_SAMPLES
                     with torch.no_grad():
-                        if DUELING_ENABLED:
-                            # Dueling gives us A directly: Q = V + A, so A = Q - V
-                            (v1, a1, _), (v2, a2, _) = critic.both_with_va(b_obs, ap)
-                            advantage = torch.min(a1, a2)  # Use min for consistency with twin-Q
-                        elif SACV1_ENABLED or DQV_ENABLED:
-                            # Use Q - V as advantage (lower variance, proper advantage estimate)
-                            v_baseline = v_critic(b_obs).squeeze(-1)
-                            advantage = qp.detach() - v_baseline
-                        else:
-                            # Fallback: two-sample Q - Q baseline (higher variance)
-                            ap2, _ = actor(b_obs)
-                            q_baseline = critic(b_obs, ap2)
-                            advantage = qp.detach() - q_baseline
-                        surprisal = (-lp.detach()).clamp(-DG_CLIP_SURPRISAL, DG_CLIP_SURPRISAL)
-                        delight = advantage * surprisal
-                        if DG_WHITEN:
-                            delight = (delight - delight.mean()) / (delight.std() + 1e-6)
-                        gate = torch.sigmoid(delight / DG_ETA)
-                    if DG_GATE_Q_ONLY:
-                        # Gate only -Q term, leave entropy ungated
-                        a_loss = (alpha.detach() * lp - gate * qp).mean()
+                        _, pre_std = actor._get_distribution(b_obs)
+                        # Use pessimistic Q (min of twin) throughout to avoid exploitation
+                        q1_a, q2_a = critic.both(b_obs, ap)
+                        q_actor = torch.min(q1_a, q2_a)
+
+                        # SBA: start from stored best action
+                        best_actions = b_best.clone()
+                        q1_b, q2_b = critic.both(b_obs, best_actions)
+                        best_q = torch.min(q1_b, q2_b)
+
+                        # Check if current actor is better than stored best
+                        actor_better = q_actor > best_q
+                        best_actions[actor_better] = ap.detach()[actor_better]
+                        best_q[actor_better] = q_actor[actor_better]
+
+                        # Batched Gaussian exploration: S samples per state in one critic pass
+                        A = ap.shape[-1]
+                        noise = torch.randn(B, S, A, device=b_obs.device) * pre_std.unsqueeze(1).clamp(min=0.01)
+                        all_samples = (best_actions.unsqueeze(1) + noise).clamp(-1.0, 1.0)  # (B, S, A)
+
+                        # Single batched critic forward pass
+                        obs_exp = b_obs.unsqueeze(1).expand(-1, S, -1).reshape(B * S, -1)
+                        act_flat = all_samples.reshape(B * S, -1)
+                        q_all = critic(obs_exp, act_flat).reshape(B, S)  # (B, S)
+
+                        # Best sample per state
+                        best_sample_idx = q_all.argmax(dim=1)
+                        q_best_sample = q_all.gather(1, best_sample_idx.unsqueeze(1)).squeeze(1)
+                        best_sample_actions = all_samples[torch.arange(B), best_sample_idx]
+
+                        # Use pessimistic Q (min of twin critics) to avoid Q-exploitation
+                        q1_best, q2_best = critic.both(b_obs, best_sample_actions)
+                        q_best_pessimistic = torch.min(q1_best, q2_best)
+
+                        sample_better = q_best_pessimistic > best_q
+                        best_actions[sample_better] = best_sample_actions[sample_better]
+                        best_q[sample_better] = q_best_pessimistic[sample_better]
+
+                        # SBA: store best found action back
+                        buffer.update_best_actions(b_idx, best_actions.cpu().numpy())
+
+                        improved = best_q > q_actor
+                        spg_frac = improved.float().mean().item()
+
+                    # --- SPG diagnostics: compare to reparameterized gradient ---
+                    with torch.no_grad():
+                        spg_dir = best_actions - ap.detach()  # (B, A) SPG direction
+                        # Source tracking: where did the winning action come from?
+                        from_sba = (~actor_better & ~sample_better).float().mean().item()
+                        from_actor = (actor_better & ~improved).float().mean().item()
+                        from_sample = sample_better.float().mean().item()
+
+                    # Compute reparameterized gradient direction for comparison
+                    ap_for_grad = ap.detach().requires_grad_(True)
+                    q_for_grad = critic(b_obs, ap_for_grad)
+                    q_for_grad.sum().backward()
+                    reparam_dir = ap_for_grad.grad.detach()  # (B, A) direction reparam would go
+
+                    # Cosine similarity between SPG and reparam directions
+                    with torch.no_grad():
+                        cos_sim = F.cosine_similarity(spg_dir, reparam_dir, dim=-1)  # (B,)
+                        # Q at reparam step (normalized step in gradient direction)
+                        reparam_step = ap.detach() + reparam_dir / (reparam_dir.norm(dim=-1, keepdim=True) + 1e-8) * spg_dir.norm(dim=-1, keepdim=True)
+                        reparam_step = reparam_step.clamp(-1.0, 1.0)
+                        q1_rep, q2_rep = critic.both(b_obs, reparam_step)
+                        q_reparam = torch.min(q1_rep, q2_rep)
+
+                    spg_diag = {
+                        "cos_sim_mean": cos_sim.mean().item(),
+                        "cos_sim_improved": cos_sim[improved].mean().item() if improved.any() else 0.0,
+                        "spg_q_gain": (best_q - q_actor).mean().item(),
+                        "reparam_q_gain": (q_reparam - q_actor).mean().item(),
+                        "from_sba": from_sba,
+                        "from_actor": from_actor,
+                        "from_sample": from_sample,
+                        "spg_frac": spg_frac,
+                        "spg_step_norm": spg_dir.norm(dim=-1).mean().item(),
+                    }
+
+                    # Regress ap (reparameterized, with grad) toward best_actions
+                    if improved.any():
+                        a_loss_spg = F.mse_loss(ap[improved], best_actions[improved])
                     else:
-                        # Gate full actor loss (original DG)
-                        a_loss = (gate * (alpha.detach() * lp - qp)).mean()
-                    dg_gate_mean = gate.mean().item()
-                    dg_gate_std = gate.std().item()
-                    dg_delight_mean = delight.mean().item()
-                else:
-                    a_loss = (alpha.detach() * lp - qp).mean()
-                    dg_gate_mean = 1.0
+                        a_loss_spg = torch.tensor(0.0, device=b_obs.device)
+                    a_loss = a_loss_spg + (alpha.detach() * lp).mean()
+                    dg_gate_mean = spg_frac
                     dg_gate_std = 0.0
-                    dg_delight_mean = 0.0
+                    dg_delight_mean = (best_q - q_actor).mean().item()
+                    alpha_actor = alpha.detach()
+
+                else:
+                    # Standard reparameterized actor update (DDPG-style)
+                    # State-dependent alpha modulation for actor
+                    if TDE_ENABLED:
+                        with torch.no_grad():
+                            td_scale = td_err.mean() + 1e-6
+                            tde_multiplier = 1.0 + TDE_BETA * td_err / td_scale
+                        alpha_actor = alpha.detach() * tde_multiplier
+                    elif UCB_ENABLED:
+                        with torch.no_grad():
+                            q1_fresh, q2_fresh = critic.both(b_obs, ap)
+                            q_disagree = (q1_fresh - q2_fresh).abs()
+                            q_scale = (q1_fresh + q2_fresh).abs().mean() / 2.0 + 1e-6
+                            ucb_multiplier = 1.0 + UCB_BETA * q_disagree / q_scale
+                        alpha_actor = alpha.detach() * ucb_multiplier
+                    else:
+                        alpha_actor = alpha.detach()
+
+                    if DG_ENABLED:
+                        with torch.no_grad():
+                            if DUELING_ENABLED:
+                                (v1, a1, _), (v2, a2, _) = critic.both_with_va(b_obs, ap)
+                                advantage = torch.min(a1, a2)
+                            elif SACV1_ENABLED or DQV_ENABLED:
+                                v_baseline = v_critic(b_obs).squeeze(-1)
+                                advantage = qp.detach() - v_baseline
+                            else:
+                                ap2, _ = actor(b_obs)
+                                q_baseline = critic(b_obs, ap2)
+                                advantage = qp.detach() - q_baseline
+                            surprisal = (-lp.detach()).clamp(-DG_CLIP_SURPRISAL, DG_CLIP_SURPRISAL)
+                            delight = advantage * surprisal
+                            if DG_WHITEN:
+                                delight = (delight - delight.mean()) / (delight.std() + 1e-6)
+                            gate = torch.sigmoid(delight / DG_ETA)
+                        if DG_GATE_Q_ONLY:
+                            a_loss = (alpha_actor * lp - gate * qp).mean()
+                        else:
+                            a_loss = (gate * (alpha_actor * lp - qp)).mean()
+                        dg_gate_mean = gate.mean().item()
+                        dg_gate_std = gate.std().item()
+                        dg_delight_mean = delight.mean().item()
+                    else:
+                        a_loss = (alpha_actor * lp - qp).mean()
+                        dg_gate_mean = 1.0
+                        dg_gate_std = 0.0
+                        dg_delight_mean = 0.0
 
                 actor_opt.zero_grad()
                 a_loss.backward()
                 nn.utils.clip_grad_norm_(actor.parameters(), MAX_GRAD_NORM)
                 actor_opt.step()
 
-                if LEARNABLE_ALPHA and alpha_opt is not None:
+                if RSAT_ENABLED:
+                    # RSAT: joint update of scalar α and residual net
+                    # Recompute α(s) with grad for both log_alpha and rsat_net
+                    alpha_scalar_u = log_alpha.exp()
+                    alpha_for_update = alpha_scalar_u * (1.0 + RSAT_EPS * torch.tanh(rsat_net(b_obs)).squeeze(-1))
+                    al = -(alpha_for_update * (lp.detach() + target_entropy)).mean()
+                    alpha_opt.zero_grad()
+                    rsat_opt.zero_grad()
+                    al.backward()
+                    alpha_opt.step()
+                    rsat_opt.step()
+                    with torch.no_grad():
+                        log_alpha.clamp_(min=np.log(ALPHA_MIN))
+                    alpha_mean = alpha_for_update.mean().item()
+                elif SAT_ENABLED:
+                    # Original SAT: train alpha_net to match target entropy per state
+                    alpha_for_update = F.softplus(alpha_net(b_obs)).squeeze(-1)
+                    al = -(alpha_for_update * (lp.detach() + target_entropy)).mean()
+                    alpha_opt.zero_grad()
+                    al.backward()
+                    alpha_opt.step()
+                    alpha_mean = alpha_for_update.mean().item()
+                elif LEARNABLE_ALPHA and alpha_opt is not None:
                     al = -(log_alpha.exp() * (lp.detach() + target_entropy)).mean()
                     alpha_opt.zero_grad()
                     al.backward()
                     alpha_opt.step()
                     with torch.no_grad():
                         log_alpha.clamp_(min=np.log(ALPHA_MIN))
+                    alpha_mean = log_alpha.exp().item()
+                else:
+                    alpha_mean = alpha.mean().item() if (SAT_ENABLED or RSAT_ENABLED) else alpha.item()
 
                 last_metrics = {
                     "critic_loss": c_loss.item(),
                     "actor_loss": a_loss.item(),
-                    "alpha": alpha.item(),
+                    "alpha": alpha_mean,
                     "q_mean": q1v.mean().item(),
                     "target_q_mean": soft_t.mean().item(),
                     "log_prob": lp.mean().item(),
@@ -551,7 +853,15 @@ def train_sac(task_name: str) -> tuple[float, int]:
                     "dg_delight_mean": dg_delight_mean,
                     "v_loss": v_loss.item(),
                     "v_mean": v_pred.mean().item() if (DQV_ENABLED or SACV1_ENABLED) else 0.0,
+                    "alpha_std": alpha_actor.std().item() if (SAT_ENABLED or RSAT_ENABLED or UCB_ENABLED or TDE_ENABLED) else 0.0,
+                    "alpha_min": alpha_actor.min().item() if (SAT_ENABLED or RSAT_ENABLED or UCB_ENABLED or TDE_ENABLED) else alpha_mean,
+                    "alpha_max": alpha_actor.max().item() if (SAT_ENABLED or RSAT_ENABLED or UCB_ENABLED or TDE_ENABLED) else alpha_mean,
+                    "ucb_mult_mean": ucb_multiplier.mean().item() if UCB_ENABLED else (tde_multiplier.mean().item() if TDE_ENABLED else 1.0),
+                    "ucb_mult_max": ucb_multiplier.max().item() if UCB_ENABLED else (tde_multiplier.max().item() if TDE_ENABLED else 1.0),
+                    "q_disagree_mean": q_disagree.mean().item() if UCB_ENABLED else (td_err.mean().item() if TDE_ENABLED else 0.0),
                 }
+                if SPG_ENABLED:
+                    last_metrics.update(spg_diag)
 
             critic_target.update()
             if v_target is not None:
@@ -563,11 +873,20 @@ def train_sac(task_name: str) -> tuple[float, int]:
                 metrics.log(env_steps, grad_steps=grad_steps, ep_count=ep_count, **last_metrics)
 
         if env_steps % 20000 < ACTION_REPEAT and env_steps >= 20000:
-            alpha_val = log_alpha.exp().item()
+            alpha_val = last_metrics.get("alpha", 0.1) if last_metrics else (log_alpha.exp().item() if log_alpha is not None else 0.1)
             q_str = f"q={last_metrics.get('q_mean', 0):.1f}" if last_metrics else "q=n/a"
             cl_str = f"cl={last_metrics.get('critic_loss', 0):.3f}" if last_metrics else "cl=n/a"
+            if (SAT_ENABLED or RSAT_ENABLED) and last_metrics:
+                alpha_str = f"α={alpha_val:.3f}[{last_metrics.get('alpha_min', 0):.3f}-{last_metrics.get('alpha_max', 0):.3f}]"
+            elif (UCB_ENABLED or TDE_ENABLED) and last_metrics:
+                tag = "tde" if TDE_ENABLED else "ucb"
+                m = last_metrics.get('ucb_mult_mean', 1.0)
+                mx = last_metrics.get('ucb_mult_max', 1.0)
+                alpha_str = f"α={alpha_val:.4f} {tag}={m:.2f}x(max={mx:.2f}x)"
+            else:
+                alpha_str = f"alpha={alpha_val:.4f}"
             print(f"[{task_name}] step={env_steps} gs={grad_steps} eps={ep_count} "
-                  f"alpha={alpha_val:.4f} {q_str} {cl_str} "
+                  f"{alpha_str} {q_str} {cl_str} "
                   f"elapsed={check_time():.0f}s", flush=True)
     step = env_steps
 
@@ -594,18 +913,25 @@ if __name__ == "__main__":
     humanoid_return = 0.0
     np_c = np_h = 0
 
+    # TASK env var: run a single specific task (e.g., TASK=quadruped)
+    single_task = os.environ.get("TASK", "")
+
     try:
-        cheetah_return, np_c = train_sac("cheetah")
-        check_time()
-        if not CHEETAH_ONLY:
-            humanoid_return, np_h = train_sac("humanoid")
-        total_time = check_time()
+        if single_task:
+            ret, np_t = train_sac(single_task)
+            total_time = check_time()
+            print(f"\n{single_task}_return: {ret:.2f}")
+            print(f"training_seconds: {total_time:.1f}")
+        else:
+            cheetah_return, np_c = train_sac("cheetah")
+            check_time()
+            if not CHEETAH_ONLY:
+                humanoid_return, np_h = train_sac("humanoid")
+            total_time = check_time()
+            print_summary(
+                cheetah_return=cheetah_return, humanoid_return=humanoid_return,
+                training_seconds=total_time, total_seconds=total_time,
+                num_params_cheetah=np_c, num_params_humanoid=np_h, device=DEVICE,
+            )
     except (TimeLimitExceeded, SystemExit) as e:
         print(f"\n!!! TIMEOUT — printing partial results !!!", flush=True)
-        total_time = 600.0
-
-    print_summary(
-        cheetah_return=cheetah_return, humanoid_return=humanoid_return,
-        training_seconds=total_time, total_seconds=total_time,
-        num_params_cheetah=np_c, num_params_humanoid=np_h, device=DEVICE,
-    )

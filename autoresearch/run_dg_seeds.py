@@ -1,4 +1,4 @@
-"""Driver: run DG-on vs DG-off on cheetah for 3 seeds each, collate results.
+"""Driver: run algorithm variants on cheetah for 3 seeds each, collate results.
 
 Run from the autoresearch directory:
     python run_dg_seeds.py
@@ -11,27 +11,26 @@ import sys
 import time
 from statistics import mean, stdev
 
-SEEDS = [42, 43, 44]
-# Configs are (name, env_overrides_dict).
-# Baseline SAC is well-established: mean=339.92, std=9.42
-# Dueling SAC (β=0.01) is well-established: mean=367.03, std=23.65
+SEEDS = [42, 43, 44, 45, 46]  # Full 5 seeds
+TASK = ""
 CONFIGS = [
-    ("dueling_b001",  {"DUELING": "1", "DUELING_BETA": "0.001"}),
-    ("dueling_b01",   {"DUELING": "1", "DUELING_BETA": "0.1"}),
+    ("sac_n8",       {"CHEETAH_ONLY": "1", "N_CRITICS": "8"}),                                    # SAC N=8
+    ("spg32_duel_n8", {"CHEETAH_ONLY": "1", "N_CRITICS": "8", "SPG": "1", "SPG_SAMPLES": "32", "DUELING": "1"}),  # SPG32+Dueling+N=8
 ]
 PYTHON = sys.executable
-LOG_DIR = "/tmp/dueling_beta_seeds"
+LOG_DIR = f"/tmp/n8_sweep"
 os.makedirs(LOG_DIR, exist_ok=True)
 
-EVAL_RE = re.compile(r"cheetah_return:\s+([-\d\.]+)")
+EVAL_RE = re.compile(r"(?:cheetah|quadruped)_return:\s+([-\d\.]+)")
 TIME_RE = re.compile(r"training_seconds:\s+([-\d\.]+)")
-STEP_RE = re.compile(r"\[cheetah\] eval=([-\d\.]+)")
+STEP_RE = re.compile(r"\[(?:cheetah|quadruped)\] eval=([-\d\.]+)")
 
 
 def run_one(config_name: str, overrides: dict, seed: int) -> dict:
     log_path = os.path.join(LOG_DIR, f"{config_name}_s{seed}.log")
     env = os.environ.copy()
-    env.update({**overrides, "SEED": str(seed), "CHEETAH_ONLY": "1"})
+    task_env = {"TASK": TASK} if TASK else {"CHEETAH_ONLY": "1"}
+    env.update({**overrides, **task_env, "SEED": str(seed)})
     t0 = time.time()
     with open(log_path, "w") as f:
         proc = subprocess.run(
@@ -39,6 +38,13 @@ def run_one(config_name: str, overrides: dict, seed: int) -> dict:
             env=env, stdout=f, stderr=subprocess.STDOUT, check=False,
         )
     elapsed = time.time() - t0
+    # Copy per-step metrics CSV for post-hoc analysis
+    csv_name = f"{TASK}_metrics.csv" if TASK else "cheetah_metrics.csv"
+    csv_src = os.path.join(os.path.dirname(__file__), "runs", csv_name)
+    csv_dst = os.path.join(LOG_DIR, f"{config_name}_s{seed}_metrics.csv")
+    if os.path.exists(csv_src):
+        import shutil
+        shutil.copy2(csv_src, csv_dst)
     with open(log_path) as f:
         text = f.read()
     m_ret = EVAL_RE.search(text)
@@ -61,8 +67,10 @@ def summarize(rows):
     print()
     for cfg, _ in CONFIGS:
         xs = [r["return"] for r in rows if r["config"] == cfg]
+        ts = [r["train_s"] for r in rows if r["config"] == cfg]
         if len(xs) >= 2:
-            print(f"{cfg:>10s}: mean={mean(xs):.2f}  std={stdev(xs):.2f}  n={len(xs)}")
+            t_avg = mean(ts) if ts else 0
+            print(f"{cfg}: mean={mean(xs):.2f}  std={stdev(xs):.2f}  avg_time={t_avg:.0f}s  n={len(xs)}")
 
 
 def main():
