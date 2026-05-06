@@ -1,21 +1,25 @@
-"""JAX SAC on MuJoCo Playground (MJX). Clean port of train_dmc.py core.
+"""JAX SAC on MuJoCo Playground (MJX). Single-env, fully on-device.
 
-Supports:
+Supports all algorithm variants from train_dmc.py:
   - Standard SAC with twin-Q or N-critic ensemble
-  - SPG actor update (sample-and-evaluate)
-  - Dueling critics (TODO)
-  - Vectorized env stepping via jax.vmap
+  - Dueling SAC (Q = V + A with L2 reg)
+  - SPG actor update with SBA, pessimistic Q, batched eval
+  - SAT / RSAT state-adaptive temperature
+  - SPG diagnostics (cosine sim, Q-gain, source tracking)
+  - Per-chunk CSV metrics logging
 
 Usage:
-  python train_jax.py                          # CheetahRun default
-  TASK=HumanoidWalk python train_jax.py        # Different task
-  N_CRITICS=8 python train_jax.py              # Ensemble
-  SPG=1 SPG_SAMPLES=32 python train_jax.py     # SPG actor update
+  python train_jax.py                                      # SAC baseline
+  DUELING=1 python train_jax.py                            # Dueling SAC
+  SPG=1 SPG_SAMPLES=32 DUELING=1 python train_jax.py       # SPG + Dueling
+  N_CRITICS=8 python train_jax.py                          # Ensemble SAC
+  SAT=1 python train_jax.py                                # State-Adaptive Temp
+  RSAT=1 python train_jax.py                               # Residual SAT
 """
 
+import csv
 import os
 import time
-import functools
 from typing import NamedTuple
 
 import jax
@@ -30,7 +34,6 @@ import mujoco_playground as mp
 # ═════════════════════════════════════════════════════════════════════════════
 SEED = int(os.environ.get("SEED", "42"))
 TASK = os.environ.get("TASK", "CheetahRun")
-
 HIDDEN_DIM = 256
 LR = 5e-3
 GAMMA = 0.995
@@ -44,404 +47,547 @@ INIT_ALPHA = 0.1
 TARGET_ENTROPY_SCALE = 0.5
 ALPHA_MIN = 0.01
 MAX_GRAD_NORM = 1.0
-
-NUM_ENVS = int(os.environ.get("NUM_ENVS", "16"))
 TOTAL_STEPS = int(os.environ.get("STEPS", "100000"))
 N_CRITICS = int(os.environ.get("N_CRITICS", "2"))
 EVAL_EPISODES = int(os.environ.get("EVAL_EPS", "20"))
+LOG_INTERVAL = int(os.environ.get("LOG_INTERVAL", "20000"))
+CHUNK_SIZE = int(os.environ.get("CHUNK", "500"))
+
+DUELING_ENABLED = bool(int(os.environ.get("DUELING", "0")))
+DUELING_BETA = float(os.environ.get("DUELING_BETA", "0.01"))
 
 SPG_ENABLED = bool(int(os.environ.get("SPG", "0")))
 SPG_SAMPLES = int(os.environ.get("SPG_SAMPLES", "32"))
 
-LOG_STD_MIN = -10.0
-LOG_STD_MAX = 2.0
+SAT_ENABLED = bool(int(os.environ.get("SAT", "0")))
+SAT_LR = float(os.environ.get("SAT_LR", "0.0001"))
+
+RSAT_ENABLED = bool(int(os.environ.get("RSAT", "0")))
+RSAT_EPS = float(os.environ.get("RSAT_EPS", "0.5"))
+RSAT_LR = float(os.environ.get("RSAT_LR", "0.0001"))
+
+LOG_STD_MIN, LOG_STD_MAX = -10.0, 2.0
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# NETWORKS (Flax)
+# NETWORKS
 # ═════════════════════════════════════════════════════════════════════════════
+def _ortho(scale):
+    return nn.initializers.orthogonal(scale)
+
 class QNetwork(nn.Module):
+    """Standard Q(s,a) → scalar."""
     hidden_dim: int = 256
-
     @nn.compact
     def __call__(self, obs, action):
         x = jnp.concatenate([obs, action], -1)
-        x = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)))(x)
+        x = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(x)
         x = nn.LayerNorm()(x)
         x = nn.relu(x)
-        x = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)))(x)
+        x = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(x)
         x = nn.LayerNorm()(x)
         x = nn.relu(x)
-        x = nn.Dense(1, kernel_init=nn.initializers.orthogonal(0.01))(x)
-        return x.squeeze(-1)
+        return nn.Dense(1, kernel_init=_ortho(0.01))(x).squeeze(-1)
+
+
+class DuelingQNetwork(nn.Module):
+    """Q(s,a) = V(s) + A(s,a) with shared trunk."""
+    hidden_dim: int = 256
+    @nn.compact
+    def __call__(self, obs, action):
+        v, a, q = self.v_and_a(obs, action)
+        return q
+
+    def v_and_a(self, obs, action):
+        trunk = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(obs)
+        trunk = nn.LayerNorm()(trunk)
+        trunk = nn.relu(trunk)
+        trunk = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(trunk)
+        trunk = nn.LayerNorm()(trunk)
+        trunk = nn.relu(trunk)
+        v = nn.Dense(1, kernel_init=_ortho(0.01))(trunk).squeeze(-1)
+        a_in = jnp.concatenate([trunk, action], -1)
+        a_hidden = nn.relu(nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(a_in))
+        a = nn.Dense(1, kernel_init=_ortho(0.01))(a_hidden).squeeze(-1)
+        return v, a, v + a
 
 
 class Actor(nn.Module):
     action_dim: int
     hidden_dim: int = 256
-
     @nn.compact
     def __call__(self, obs, key):
-        x = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)))(obs)
+        x = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(obs)
         x = nn.LayerNorm()(x)
         x = nn.relu(x)
-        x = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)))(x)
+        x = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(x)
         x = nn.LayerNorm()(x)
         x = nn.relu(x)
-        mean = nn.Dense(self.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(x)
-        log_std = nn.Dense(self.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(x)
-        log_std = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
+        mean = nn.Dense(self.action_dim, kernel_init=_ortho(0.01))(x)
+        log_std = jnp.clip(
+            nn.Dense(self.action_dim, kernel_init=_ortho(0.01))(x),
+            LOG_STD_MIN, LOG_STD_MAX)
         std = jnp.exp(log_std)
-
-        noise = jax.random.normal(key, mean.shape)
-        u = mean + std * noise  # pre-squash
+        u = mean + std * jax.random.normal(key, mean.shape)
         action = jnp.tanh(u)
-
-        # Log prob with tanh correction
-        log_prob = -0.5 * (((u - mean) / (std + 1e-6)) ** 2 + 2 * log_std + jnp.log(2 * jnp.pi))
-        log_prob = log_prob.sum(-1)
-        log_prob -= jnp.log(1 - action ** 2 + 1e-6).sum(-1)  # tanh correction
-
+        log_prob = (-0.5 * (((u - mean) / (std + 1e-6))**2 + 2*log_std
+                   + jnp.log(2*jnp.pi))).sum(-1)
+        log_prob -= jnp.log(1 - action**2 + 1e-6).sum(-1)
         return action, log_prob, mean, std
 
-    def get_action_deterministic(self, obs):
-        x = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)))(obs)
-        x = nn.LayerNorm()(x)
+
+class AlphaNet(nn.Module):
+    """SAT: state-dependent alpha. Output: softplus → α > 0."""
+    @nn.compact
+    def __call__(self, obs):
+        x = nn.Dense(64, kernel_init=_ortho(0.1))(obs)
         x = nn.relu(x)
-        x = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)))(x)
-        x = nn.LayerNorm()(x)
+        return nn.softplus(nn.Dense(1, kernel_init=_ortho(0.01),
+                           bias_init=nn.initializers.constant(jnp.log(INIT_ALPHA)))(x)).squeeze(-1)
+
+
+class RSATNet(nn.Module):
+    """RSAT: residual α(s) = α_scalar · (1 + ε·tanh(f(s)))."""
+    @nn.compact
+    def __call__(self, obs):
+        x = nn.Dense(64, kernel_init=_ortho(0.1))(obs)
         x = nn.relu(x)
-        mean = nn.Dense(self.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(x)
-        return jnp.tanh(mean)
+        return nn.Dense(1, kernel_init=_ortho(0.01),
+                        bias_init=nn.initializers.zeros)(x).squeeze(-1)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# REPLAY BUFFER (numpy, off-JAX for simplicity)
+# REPLAY BUFFER — pure JAX, on-device
 # ═════════════════════════════════════════════════════════════════════════════
-class ReplayBuffer:
-    def __init__(self, capacity, obs_dim, action_dim):
-        self.capacity = capacity
-        self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.actions = np.zeros((capacity, action_dim), dtype=np.float32)
-        self.rewards = np.zeros(capacity, dtype=np.float32)
-        self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.dones = np.zeros(capacity, dtype=np.bool_)
-        self.pos = 0
-        self.size = 0
-        self.rng = np.random.default_rng(42)
+class Buffer(NamedTuple):
+    obs: jnp.ndarray
+    act: jnp.ndarray
+    rew: jnp.ndarray
+    nobs: jnp.ndarray
+    done: jnp.ndarray
+    best_act: jnp.ndarray    # SBA: stored best action
+    pos: jnp.ndarray
+    size: jnp.ndarray
 
-    def add(self, obs, action, reward, next_obs, done):
-        # obs can be (N, obs_dim) for vectorized envs
-        n = obs.shape[0] if obs.ndim > 1 else 1
-        if obs.ndim == 1:
-            obs, action, reward, next_obs, done = (
-                obs[None], action[None], np.array([reward]), next_obs[None], np.array([done])
-            )
-        for i in range(n):
-            idx = self.pos
-            self.obs[idx] = obs[i]
-            self.actions[idx] = action[i]
-            self.rewards[idx] = reward[i]
-            self.next_obs[idx] = next_obs[i]
-            self.dones[idx] = done[i]
-            self.pos = (self.pos + 1) % self.capacity
-            self.size = min(self.size + 1, self.capacity)
+def buf_new(obs_dim, act_dim):
+    return Buffer(
+        obs=jnp.zeros((BUFFER_CAPACITY, obs_dim)),
+        act=jnp.zeros((BUFFER_CAPACITY, act_dim)),
+        rew=jnp.zeros(BUFFER_CAPACITY),
+        nobs=jnp.zeros((BUFFER_CAPACITY, obs_dim)),
+        done=jnp.zeros(BUFFER_CAPACITY),
+        best_act=jnp.zeros((BUFFER_CAPACITY, act_dim)),
+        pos=jnp.int32(0), size=jnp.int32(0))
 
-    def sample(self, batch_size):
-        idx = self.rng.integers(0, self.size, size=batch_size)
-        return (
-            jnp.array(self.obs[idx]),
-            jnp.array(self.actions[idx]),
-            jnp.array(self.rewards[idx]),
-            jnp.array(self.next_obs[idx]),
-            jnp.array(self.dones[idx].astype(np.float32)),
-        )
+def buf_add(b, obs, act, rew, nobs, done):
+    p = b.pos
+    return Buffer(
+        obs=b.obs.at[p].set(obs), act=b.act.at[p].set(act),
+        rew=b.rew.at[p].set(rew), nobs=b.nobs.at[p].set(nobs),
+        done=b.done.at[p].set(done),
+        best_act=b.best_act.at[p].set(act),  # SBA: init to original action
+        pos=(p + 1) % BUFFER_CAPACITY, size=jnp.minimum(b.size + 1, BUFFER_CAPACITY))
+
+def buf_sample(b, key):
+    idx = jax.random.randint(key, (BATCH_SIZE,), 0, b.size)
+    return (b.obs[idx], b.act[idx], b.rew[idx], b.nobs[idx], b.done[idx],
+            b.best_act[idx], idx)
+
+def buf_update_best(b, idx, best_act):
+    return b._replace(best_act=b.best_act.at[idx].set(best_act))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TRAINING
+# METRICS LOGGER
+# ═════════════════════════════════════════════════════════════════════════════
+class MetricsLogger:
+    def __init__(self):
+        self.rows = []
+        self.fields = None
+    def log(self, **kw):
+        if self.fields is None:
+            self.fields = list(kw.keys())
+        self.rows.append(kw)
+    def dump(self, path):
+        if not self.rows:
+            return
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=self.fields)
+            w.writeheader()
+            w.writerows(self.rows)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAIN
 # ═════════════════════════════════════════════════════════════════════════════
 def main():
     rng = jax.random.PRNGKey(SEED)
-    print(f"JAX devices: {jax.devices()}")
+    print(f"JAX devices: {jax.devices()}", flush=True)
 
-    # Environment
     env = mp.dm_control_suite.load(TASK, config_overrides={'impl': 'jax'})
-    obs_dim = env.observation_size
-    action_dim = env.action_size
-    print(f"[{TASK}] obs_dim={obs_dim}, action_dim={action_dim}")
+    obs_dim, action_dim = env.observation_size, env.action_size
+    print(f"[{TASK}] obs={obs_dim}, act={action_dim}", flush=True)
+    print(f"Config: N_CRITICS={N_CRITICS} DUELING={DUELING_ENABLED} "
+          f"SPG={SPG_ENABLED}({SPG_SAMPLES}) SAT={SAT_ENABLED} RSAT={RSAT_ENABLED}", flush=True)
 
-    # Init networks
+    # ── Network init ─────────────────────────────────────────────────────
     actor = Actor(action_dim=action_dim, hidden_dim=HIDDEN_DIM)
-    q_net = QNetwork(hidden_dim=HIDDEN_DIM)
+    q_net = DuelingQNetwork(hidden_dim=HIDDEN_DIM) if DUELING_ENABLED else QNetwork(hidden_dim=HIDDEN_DIM)
 
-    rng, actor_key, *q_keys = jax.random.split(rng, 2 + N_CRITICS)
-    dummy_obs = jnp.zeros(obs_dim)
-    dummy_act = jnp.zeros(action_dim)
+    rng, akey, *qkeys = jax.random.split(rng, 2 + N_CRITICS)
+    d_obs, d_act = jnp.zeros(obs_dim), jnp.zeros(action_dim)
+    actor_params = actor.init(akey, d_obs, akey)
+    q_params = jax.tree.map(lambda *xs: jnp.stack(xs),
+                            *[q_net.init(qkeys[i], d_obs, d_act) for i in range(N_CRITICS)])
+    tgt_q = jax.tree.map(jnp.copy, q_params)
 
-    actor_params = actor.init(actor_key, dummy_obs, actor_key)
-    # Stack all critic params into a single pytree for vmap
-    q_params_single = q_net.init(q_keys[0], dummy_obs, dummy_act)
-    q_params_stacked = jax.tree.map(
-        lambda *xs: jnp.stack(xs),
-        *[q_net.init(q_keys[i], dummy_obs, dummy_act) for i in range(N_CRITICS)]
-    )
-    target_q_params = jax.tree.map(jnp.copy, q_params_stacked)
-
-    log_alpha = jnp.log(INIT_ALPHA)
+    gamma_eff = GAMMA ** ACTION_REPEAT
     target_entropy = -action_dim * TARGET_ENTROPY_SCALE
 
-    # Vmapped critic: apply all N critics at once
-    def q_apply_all(q_params_stacked, obs, action):
-        """Apply all N critics, return (N, B) Q-values."""
-        return jax.vmap(lambda qp: q_net.apply(qp, obs, action))(q_params_stacked)
+    # Critic helpers
+    q_apply_all = lambda qp, o, a: jax.vmap(lambda p: q_net.apply(p, o, a))(qp)
+    q_min_fn = lambda qp, o, a: jnp.min(q_apply_all(qp, o, a), axis=0)
 
-    def q_min(q_params_stacked, obs, action):
-        """Min over all critics."""
-        return jnp.min(q_apply_all(q_params_stacked, obs, action), axis=0)
+    # SAT / RSAT networks (always init for scan compatibility, only used when enabled)
+    sat_net = AlphaNet()
+    rsat_net_model = RSATNet()
+    rng, sat_key = jax.random.split(rng)
+    sat_params = sat_net.init(sat_key, d_obs)
+    rsat_params = rsat_net_model.init(sat_key, d_obs)
 
     # Optimizers
-    actor_opt = optax.chain(optax.clip_by_global_norm(MAX_GRAD_NORM), optax.adam(LR))
-    critic_opt = optax.chain(optax.clip_by_global_norm(MAX_GRAD_NORM), optax.adam(LR))
-    alpha_opt = optax.adam(LR)
+    a_opt = optax.chain(optax.clip_by_global_norm(MAX_GRAD_NORM), optax.adam(LR))
+    c_opt = optax.chain(optax.clip_by_global_norm(MAX_GRAD_NORM), optax.adam(LR))
+    al_opt = optax.adam(LR)
+    a_opt_s = a_opt.init(actor_params)
+    c_opt_s = c_opt.init(q_params)
+    log_alpha = jnp.log(INIT_ALPHA)
+    al_opt_s = al_opt.init(log_alpha)
 
-    actor_opt_state = actor_opt.init(actor_params)
-    critic_opt_state = critic_opt.init(q_params_stacked)  # Single opt state for stacked params
-    alpha_opt_state = alpha_opt.init(log_alpha)
+    sat_opt = optax.adam(SAT_LR)
+    sat_opt_s = sat_opt.init(sat_params)
+    rsat_opt = optax.adam(RSAT_LR)
+    rsat_opt_s = rsat_opt.init(rsat_params)
 
-    buffer = ReplayBuffer(BUFFER_CAPACITY, obs_dim, action_dim)
+    buf = buf_new(obs_dim, action_dim)
+    metrics = MetricsLogger()
 
-    # Vectorized env
-    v_reset = jax.jit(jax.vmap(env.reset))
-    v_step = jax.jit(jax.vmap(env.step))
+    # ── Alpha computation (handles scalar / SAT / RSAT) ──────────────────
+    def get_alpha(la, obs, sat_p=None, rsat_p=None):
+        """Returns alpha (scalar or per-state) and alpha_next for Bellman."""
+        if SAT_ENABLED and sat_p is not None:
+            return sat_net.apply(sat_p, obs)
+        elif RSAT_ENABLED and rsat_p is not None:
+            base = jnp.exp(la)
+            return base * (1.0 + RSAT_EPS * jnp.tanh(rsat_net_model.apply(rsat_p, obs)))
+        else:
+            return jnp.exp(la)
 
-    rng, env_key = jax.random.split(rng)
-    env_keys = jax.random.split(env_key, NUM_ENVS)
-    env_states = v_reset(env_keys)
+    # ── Core update functions ────────────────────────────────────────────
+    def critic_update(qp, tqp, ap, la, obs, act, rew, nobs, dn, key, cs,
+                      sat_p=None, rsat_p=None):
+        alpha_next = get_alpha(la, nobs, sat_p, rsat_p)
+        na, nlp, _, _ = actor.apply(ap, nobs, key)
+        tgt = rew + gamma_eff * (1-dn) * (jnp.min(q_apply_all(tqp, nobs, na), 0) - alpha_next*nlp)
 
-    # ── JIT-compiled update functions ────────────────────────────────────────
-    @jax.jit
-    def critic_step(q_params_stacked, target_q_params, actor_params, log_alpha,
-                    obs, actions, rewards, next_obs, dones, key, opt_state):
-        alpha = jnp.exp(log_alpha)
-        gamma_eff = GAMMA ** ACTION_REPEAT
-        not_done = 1.0 - dones
+        def loss(qp):
+            qs = q_apply_all(qp, obs, act)
+            td_loss = jnp.sum(jnp.mean((qs - tgt[None,:])**2, axis=1))
+            if DUELING_ENABLED:
+                def dueling_reg(p):
+                    v, a, _ = q_net.apply(p, obs, act, method=q_net.v_and_a)
+                    return jnp.mean(v**2) + jnp.mean(a**2)
+                reg = jax.vmap(dueling_reg)(qp).sum() * (DUELING_BETA / 2)
+                return td_loss + reg
+            return td_loss
 
-        # Compute target
-        next_action, next_log_prob, _, _ = actor.apply(actor_params, next_obs, key)
-        min_target_q = jnp.min(q_apply_all(target_q_params, next_obs, next_action), axis=0)
-        target = rewards + gamma_eff * not_done * (min_target_q - alpha * next_log_prob)
+        l, g = jax.value_and_grad(loss)(qp)
+        u, cs = c_opt.update(g, cs)
+        return optax.apply_updates(qp, u), cs, l
 
-        def loss_fn(q_params_stacked):
-            all_q = q_apply_all(q_params_stacked, obs, actions)  # (N, B)
-            per_critic_loss = jnp.mean((all_q - target[None, :]) ** 2, axis=1)  # (N,)
-            return jnp.sum(per_critic_loss), all_q[0]
+    def actor_update_standard(ap, qp, la, obs, key, aos, sat_p=None, rsat_p=None):
+        alpha = get_alpha(la, obs, sat_p, rsat_p)
+        def loss(ap):
+            a, lp, _, _ = actor.apply(ap, obs, key)
+            return jnp.mean(alpha*lp - q_min_fn(qp, obs, a)), lp
+        (l, lp), g = jax.value_and_grad(loss, has_aux=True)(ap)
+        u, aos = a_opt.update(g, aos)
+        return optax.apply_updates(ap, u), aos, lp
 
-        (c_loss, q1v), grads = jax.value_and_grad(loss_fn, has_aux=True)(q_params_stacked)
-        updates, new_opt_state = critic_opt.update(grads, opt_state)
-        new_q_params = optax.apply_updates(q_params_stacked, updates)
-        return new_q_params, new_opt_state, c_loss, q1v
-
-    @jax.jit
-    def actor_step(actor_params, q_params_stacked, log_alpha, obs, key, opt_state):
-        def loss_fn(actor_params):
-            alpha = jnp.exp(log_alpha)
-            action, log_prob, _, _ = actor.apply(actor_params, obs, key)
-            min_q = q_min(q_params_stacked, obs, action)
-            return jnp.mean(alpha * log_prob - min_q), log_prob
-        (a_loss, log_prob), grads = jax.value_and_grad(loss_fn, has_aux=True)(actor_params)
-        updates, new_opt_state = actor_opt.update(grads, opt_state)
-        new_actor_params = optax.apply_updates(actor_params, updates)
-        return new_actor_params, new_opt_state, a_loss, log_prob
-
-    @jax.jit
-    def alpha_step(log_alpha, log_prob, opt_state):
-        def loss_fn(log_alpha):
-            alpha = jnp.exp(log_alpha)
-            return -jnp.mean(alpha * (jax.lax.stop_gradient(log_prob) + target_entropy))
-        al, grads = jax.value_and_grad(loss_fn)(log_alpha)
-        updates, new_opt_state = alpha_opt.update(grads, opt_state)
-        new_log_alpha = optax.apply_updates(log_alpha, updates)
-        new_log_alpha = jnp.maximum(new_log_alpha, jnp.log(ALPHA_MIN))
-        return new_log_alpha, new_opt_state
-
-    @jax.jit
-    def update_targets(q_params_stacked, target_q_params):
-        return jax.tree.map(lambda t, q: t * (1 - TAU) + q * TAU, target_q_params, q_params_stacked)
-
-    # ── SPG functions ────────────────────────────────────────────────────────
-    @jax.jit
-    def spg_find_best(actor_params, q_params_stacked, obs, actions, key):
-        B = obs.shape[0]
-        S = SPG_SAMPLES
-
-        _, _, actor_mean, actor_std = actor.apply(actor_params, obs, key)
+    def spg_find_best(ap, qp, obs, act, best_stored, key):
+        """SPG: find best action via sampling. Returns (best_act, improved, q_actor, q_best)."""
+        _, _, actor_mean, actor_std = actor.apply(ap, obs, key)
         actor_action = jnp.tanh(actor_mean)
-        q_actor = q_min(q_params_stacked, obs, actor_action)
+        q_actor = q_min_fn(qp, obs, actor_action)
 
-        best_actions = actor_action
-        best_q = q_actor
+        best = best_stored
+        best_q = q_min_fn(qp, obs, best)
 
-        q_replay = q_min(q_params_stacked, obs, actions)
-        better = q_replay > best_q
-        best_actions = jnp.where(better[:, None], actions, best_actions)
-        best_q = jnp.where(better, q_replay, best_q)
+        # Check actor
+        actor_better = q_actor > best_q
+        best = jnp.where(actor_better[:, None], actor_action, best)
+        best_q = jnp.where(actor_better, q_actor, best_q)
 
-        key, sample_key = jax.random.split(key)
-        noise = jax.random.normal(sample_key, (B, S, action_dim)) * jnp.clip(actor_std[:, None, :], 0.01)
-        all_samples = jnp.clip(best_actions[:, None, :] + noise, -1.0, 1.0)
+        # Check replay
+        q_replay = q_min_fn(qp, obs, act)
+        replay_better = q_replay > best_q
+        best = jnp.where(replay_better[:, None], act, best)
+        best_q = jnp.where(replay_better, q_replay, best_q)
 
-        obs_exp = jnp.broadcast_to(obs[:, None, :], (B, S, obs_dim)).reshape(B * S, -1)
-        act_flat = all_samples.reshape(B * S, -1)
-        q_all_min = q_min(q_params_stacked, obs_exp, act_flat).reshape(B, S)
-
-        best_idx = jnp.argmax(q_all_min, axis=1)
-        best_sample_actions = all_samples[jnp.arange(B), best_idx]
-        q_best_sample = q_all_min[jnp.arange(B), best_idx]
-
+        # Batched Gaussian samples
+        B, S = obs.shape[0], SPG_SAMPLES
+        key, sk = jax.random.split(key)
+        noise = jax.random.normal(sk, (B, S, action_dim)) * jnp.clip(actor_std[:, None, :], 0.01)
+        samples = jnp.clip(best[:, None, :] + noise, -1.0, 1.0)
+        obs_exp = jnp.broadcast_to(obs[:, None, :], (B, S, obs_dim)).reshape(B*S, -1)
+        q_all = q_min_fn(qp, obs_exp, samples.reshape(B*S, -1)).reshape(B, S)
+        best_idx = jnp.argmax(q_all, axis=1)
+        best_sample = samples[jnp.arange(B), best_idx]
+        q_best_sample = q_all[jnp.arange(B), best_idx]
         sample_better = q_best_sample > best_q
-        best_actions = jnp.where(sample_better[:, None], best_sample_actions, best_actions)
+        best = jnp.where(sample_better[:, None], best_sample, best)
         best_q = jnp.where(sample_better, q_best_sample, best_q)
 
         improved = best_q > q_actor
-        return best_actions, improved, q_actor, best_q
+        return best, improved, q_actor, best_q
 
-    @jax.jit
-    def spg_actor_step(actor_params, q_params_stacked, log_alpha, obs,
-                       best_actions, improved, key, opt_state):
-        def loss_fn(actor_params):
-            alpha = jnp.exp(log_alpha)
-            action, log_prob, mean, _ = actor.apply(actor_params, obs, key)
-            actor_squashed = jnp.tanh(mean)
-            mse = jnp.sum((actor_squashed - best_actions) ** 2, axis=-1)
-            spg_loss = jnp.mean(mse * improved)
-            return spg_loss + jnp.mean(alpha * log_prob), log_prob
-        (a_loss, log_prob), grads = jax.value_and_grad(loss_fn, has_aux=True)(actor_params)
-        updates, new_opt_state = actor_opt.update(grads, opt_state)
-        new_actor_params = optax.apply_updates(actor_params, updates)
-        return new_actor_params, new_opt_state, a_loss, log_prob
+    def spg_actor_update(ap, qp, la, obs, best_act, improved, key, aos,
+                         sat_p=None, rsat_p=None):
+        alpha = get_alpha(la, obs, sat_p, rsat_p)
+        def loss(ap):
+            a, lp, mean, _ = actor.apply(ap, obs, key)
+            actor_sq = jnp.tanh(mean)
+            mse = jnp.sum((actor_sq - best_act)**2, axis=-1)
+            return jnp.mean(mse * improved) + jnp.mean(alpha * lp), lp
+        (l, lp), g = jax.value_and_grad(loss, has_aux=True)(ap)
+        u, aos = a_opt.update(g, aos)
+        return optax.apply_updates(ap, u), aos, lp
 
-    # ── Main loop ────────────────────────────────────────────────────────────
-    grad_steps = 0
-    env_steps = 0
+    def spg_diagnostics(ap, qp, obs, best_act, improved, q_actor, best_q, key):
+        """Compute cosine sim between SPG direction and reparam gradient."""
+        _, _, mean, _ = actor.apply(ap, obs, key)
+        actor_sq = jnp.tanh(mean)
+        spg_dir = best_act - actor_sq
+
+        # Reparam gradient direction
+        def q_of_action(a):
+            return q_min_fn(qp, obs, a).sum()
+        reparam_dir = jax.grad(q_of_action)(actor_sq)
+
+        cos_sim = jnp.sum(spg_dir * reparam_dir, axis=-1) / (
+            jnp.linalg.norm(spg_dir, axis=-1) * jnp.linalg.norm(reparam_dir, axis=-1) + 1e-8)
+
+        # Q at reparam step (normalized)
+        step_norm = jnp.linalg.norm(spg_dir, axis=-1, keepdims=True)
+        reparam_step = actor_sq + reparam_dir / (jnp.linalg.norm(reparam_dir, axis=-1, keepdims=True) + 1e-8) * step_norm
+        reparam_step = jnp.clip(reparam_step, -1.0, 1.0)
+        q_reparam = q_min_fn(qp, obs, reparam_step)
+
+        return {
+            'cos_sim': cos_sim.mean(),
+            'cos_sim_improved': jnp.where(improved, cos_sim, 0.0).sum() / (improved.sum() + 1e-8),
+            'spg_q_gain': (best_q - q_actor).mean(),
+            'reparam_q_gain': (q_reparam - q_actor).mean(),
+            'spg_frac': improved.astype(jnp.float32).mean(),
+            'spg_step_norm': jnp.linalg.norm(spg_dir, axis=-1).mean(),
+        }
+
+    def alpha_update(la, lp, als):
+        def loss(la):
+            return -jnp.mean(jnp.exp(la) * (jax.lax.stop_gradient(lp) + target_entropy))
+        _, g = jax.value_and_grad(loss)(la)
+        u, als = al_opt.update(g, als)
+        return jnp.maximum(optax.apply_updates(la, u), jnp.log(ALPHA_MIN)), als
+
+    def sat_update(sat_p, lp, obs, sat_os):
+        def loss(sat_p):
+            alpha_s = sat_net.apply(sat_p, obs)
+            return -jnp.mean(alpha_s * (jax.lax.stop_gradient(lp) + target_entropy))
+        _, g = jax.value_and_grad(loss)(sat_p)
+        u, sat_os = sat_opt.update(g, sat_os)
+        return optax.apply_updates(sat_p, u), sat_os
+
+    # ── Training step ────────────────────────────────────────────────────
+    def train_step(carry, _):
+        (es, buf, qp, tqp, ap, cs, aos, la, als,
+         sat_p, sat_os, rsat_p, rsat_os, gs, key) = carry
+        key, k1, k2, k3, k4, k5 = jax.random.split(key, 6)
+
+        # Collect
+        obs0 = es.obs
+        action, _, _, _ = actor.apply(ap, obs0, k1)
+        def do_repeat(carry, _):
+            s, r = carry
+            s = env.step(s, action)
+            return (s, r + s.reward), None
+        (es, tot_rew), _ = jax.lax.scan(do_repeat, (es, 0.0), None, length=ACTION_REPEAT)
+        buf = buf_add(buf, obs0, action, tot_rew, es.obs, es.done.astype(jnp.float32))
+
+        # Train
+        def do_train(args):
+            qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf = args
+            bo, ba, br, bn, bd, b_best, b_idx = buf_sample(buf, k2)
+
+            # Critic
+            qp, cs, cl = critic_update(qp, tqp, ap, la, bo, ba, br, bn, bd, k3, cs, sat_p, rsat_p)
+            gs = gs + 1
+
+            # Actor (always compute, conditionally apply)
+            if SPG_ENABLED:
+                best, improved, q_actor, best_q = spg_find_best(ap, qp, bo, ba, b_best, k4)
+                ap2, aos2, lp = spg_actor_update(ap, qp, la, bo, best, improved.astype(jnp.float32),
+                                                 k5, aos, sat_p, rsat_p)
+                # SBA: update buffer
+                buf = buf_update_best(buf, b_idx, best)
+            else:
+                ap2, aos2, lp = actor_update_standard(ap, qp, la, bo, k4, aos, sat_p, rsat_p)
+
+            # Alpha
+            if SAT_ENABLED:
+                sat_p2, sat_os2 = sat_update(sat_p, lp, bo, sat_os)
+                la2, als2 = la, als
+            elif RSAT_ENABLED:
+                la2, als2 = alpha_update(la, lp, als)
+                # RSAT net update via same entropy objective
+                def rsat_loss(rp):
+                    base = jnp.exp(la2)
+                    alpha_s = base * (1.0 + RSAT_EPS * jnp.tanh(rsat_net_model.apply(rp, bo)))
+                    return -jnp.mean(alpha_s * (jax.lax.stop_gradient(lp) + target_entropy))
+                _, rg = jax.value_and_grad(rsat_loss)(rsat_p)
+                ru, rsat_os2 = rsat_opt.update(rg, rsat_os)
+                rsat_p2 = optax.apply_updates(rsat_p, ru)
+                sat_p2, sat_os2 = sat_p, sat_os
+            else:
+                la2, als2 = alpha_update(la, lp, als)
+                sat_p2, sat_os2 = sat_p, sat_os
+                rsat_p2, rsat_os2 = rsat_p, rsat_os
+
+            do_a = (gs % ACTOR_DELAY == 0)
+            ap = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), ap2, ap)
+            aos = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), aos2, aos)
+            la = jnp.where(do_a, la2, la)
+            als = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), als2, als)
+            if SAT_ENABLED:
+                sat_p = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), sat_p2, sat_p)
+                sat_os = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), sat_os2, sat_os)
+            if RSAT_ENABLED:
+                rsat_p = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), rsat_p2, rsat_p)
+                rsat_os = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), rsat_os2, rsat_os)
+
+            tqp = jax.tree.map(lambda t,q: t*(1-TAU)+q*TAU, tqp, qp)
+            return qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf
+
+        def skip_train(args):
+            return args
+
+        train_args = (qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf)
+        result = jax.lax.cond(buf.size >= BATCH_SIZE, do_train, skip_train, train_args)
+        qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf = result
+
+        carry = (es, buf, qp, tqp, ap, cs, aos, la, als,
+                 sat_p, sat_os, rsat_p, rsat_os, gs, key)
+        return carry, la
+
+    # ── Warmup ───────────────────────────────────────────────────────────
+    def warmup_step(carry, _):
+        es, buf, key = carry
+        key, k1 = jax.random.split(key)
+        obs0 = es.obs
+        action = jax.random.uniform(k1, (action_dim,), minval=-1.0, maxval=1.0)
+        def do_repeat(carry, _):
+            s, r = carry
+            s = env.step(s, action)
+            return (s, r + s.reward), None
+        (es, tot_rew), _ = jax.lax.scan(do_repeat, (es, 0.0), None, length=ACTION_REPEAT)
+        buf = buf_add(buf, obs0, action, tot_rew, es.obs, es.done.astype(jnp.float32))
+        return (es, buf, key), None
+
+    # ── Run ──────────────────────────────────────────────────────────────
+    print("JIT compiling...", flush=True)
+    rng, ek, wk, tk = jax.random.split(rng, 4)
+    es = env.reset(ek)
+
+    warmup_n = WARMUP_STEPS // ACTION_REPEAT
+    (es, buf, _), _ = jax.lax.scan(warmup_step, (es, buf, wk), None, length=warmup_n)
+    env_steps = WARMUP_STEPS
+    print(f"Buffer filled: {int(buf.size)}", flush=True)
+
+    carry = (es, buf, q_params, tgt_q, actor_params, c_opt_s, a_opt_s,
+             log_alpha, al_opt_s, sat_params, sat_opt_s, rsat_params, rsat_opt_s,
+             jnp.int32(0), tk)
+
+    # JIT warmup
+    carry, _ = jax.lax.scan(train_step, carry, None, length=1)
+    env_steps += ACTION_REPEAT
+    print("Starting training...", flush=True)
     t0 = time.time()
 
-    print(f"Training {TASK}, {TOTAL_STEPS} steps, {N_CRITICS} critics, "
-          f"SPG={SPG_ENABLED}({SPG_SAMPLES}), {NUM_ENVS} envs", flush=True)
-    print("JIT compiling env...", flush=True)
-    # Warmup JIT
-    _test_state = env.reset(jax.random.PRNGKey(0))
-    _test_state = env.step(_test_state, jnp.zeros(action_dim))
-    print("Starting training...", flush=True)
+    decisions_left = (TOTAL_STEPS - env_steps) // ACTION_REPEAT
+    n_chunks = decisions_left // CHUNK_SIZE
 
-    while env_steps < TOTAL_STEPS:
-        # Collect experience from vectorized envs
-        rng, act_key = jax.random.split(rng)
-        obs_batch = env_states.obs
+    for i in range(n_chunks):
+        carry, alphas = jax.lax.scan(train_step, carry, None, length=CHUNK_SIZE)
+        env_steps += CHUNK_SIZE * ACTION_REPEAT
+        gs = int(carry[13])
+        la_val = carry[7]
+        elapsed = time.time() - t0
 
-        if env_steps < WARMUP_STEPS:
-            rng, noise_key = jax.random.split(rng)
-            actions = jax.random.uniform(noise_key, (NUM_ENVS, action_dim), minval=-1.0, maxval=1.0)
-        else:
-            actions, _, _, _ = actor.apply(actor_params, obs_batch, act_key)
+        alpha_val = float(jnp.exp(la_val)) if not SAT_ENABLED else float(alphas[-1])
 
-        # Step all envs (with action repeat)
-        total_rewards = jnp.zeros(NUM_ENVS)
-        next_states = env_states
-        for _ in range(ACTION_REPEAT):
-            next_states = v_step(next_states, actions)
-            total_rewards = total_rewards + next_states.reward
-        next_obs = next_states.obs
-        dones = next_states.done
+        if env_steps % LOG_INTERVAL < CHUNK_SIZE * ACTION_REPEAT + 100:
+            print(f"[{TASK}] step={env_steps} gs={gs} alpha={alpha_val:.4f} "
+                  f"sps={env_steps/elapsed:.0f} elapsed={elapsed:.0f}s", flush=True)
 
-        # Add to buffer
-        buffer.add(
-            np.array(obs_batch), np.array(actions),
-            np.array(total_rewards), np.array(next_obs), np.array(dones)
-        )
-        env_steps += NUM_ENVS * ACTION_REPEAT
+        metrics.log(
+            step=env_steps, grad_steps=gs, alpha=alpha_val,
+            sps=env_steps/elapsed, elapsed=elapsed)
 
-        # Auto-reset: playground envs auto-reset on done, so just use next_states
-        # (MJX envs reset automatically when done=True via the wrapper)
-        env_states = next_states
-
-        # Training: multiple grad steps per env collection to match PyTorch UTD
-        # PyTorch: 1 grad step per ACTION_REPEAT env steps (1 env)
-        # JAX: NUM_ENVS * ACTION_REPEAT env steps per collection → need NUM_ENVS grad steps
-        if buffer.size >= BATCH_SIZE and env_steps >= WARMUP_STEPS:
-          for _ in range(NUM_ENVS):
-            b_obs, b_act, b_rew, b_nobs, b_done = buffer.sample(BATCH_SIZE)
-
-            # Critic update
-            rng, critic_key = jax.random.split(rng)
-            q_params_stacked, critic_opt_state, c_loss, q1v = critic_step(
-                q_params_stacked, target_q_params, actor_params, log_alpha,
-                b_obs, b_act, b_rew, b_nobs, b_done, critic_key, critic_opt_state)
-
-            grad_steps += 1
-
-            # Actor update (delayed)
-            if grad_steps % ACTOR_DELAY == 0:
-                rng, actor_key = jax.random.split(rng)
-
-                if SPG_ENABLED:
-                    best_actions, improved, q_actor, best_q = spg_find_best(
-                        actor_params, q_params_stacked, b_obs, b_act, actor_key)
-                    rng, spg_key = jax.random.split(rng)
-                    actor_params, actor_opt_state, a_loss, log_prob = spg_actor_step(
-                        actor_params, q_params_stacked, log_alpha, b_obs,
-                        best_actions, improved.astype(jnp.float32), spg_key, actor_opt_state)
-                else:
-                    actor_params, actor_opt_state, a_loss, log_prob = actor_step(
-                        actor_params, q_params_stacked, log_alpha, b_obs,
-                        actor_key, actor_opt_state)
-
-                # Alpha update
-                log_alpha, alpha_opt_state = alpha_step(log_alpha, log_prob, alpha_opt_state)
-
-            # Target update
-            target_q_params = update_targets(q_params_stacked, target_q_params)
-
-        # Logging
-        if env_steps % 20000 < NUM_ENVS * ACTION_REPEAT and env_steps >= 20000:
-            elapsed = time.time() - t0
-            sps = env_steps / elapsed
-            alpha_val = float(jnp.exp(log_alpha))
-            print(f"[{TASK}] step={env_steps} gs={grad_steps} "
-                  f"alpha={alpha_val:.4f} sps={sps:.0f} "
-                  f"elapsed={elapsed:.0f}s", flush=True)
-
-    # ── Evaluation ───────────────────────────────────────────────────────────
     elapsed = time.time() - t0
-    print(f"\nTraining done in {elapsed:.1f}s ({env_steps/elapsed:.0f} sps), "
-          f"{grad_steps} grad steps", flush=True)
+    gs = int(carry[13])
+    actor_params = carry[4]
+    q_params = carry[2]
+    print(f"\nTraining: {elapsed:.1f}s, {env_steps/elapsed:.0f} sps, {gs} gs", flush=True)
 
-    # Eval: vectorized rollout
+    # ── SPG diagnostics (post-training, on last buffer sample) ───────────
+    if SPG_ENABLED:
+        buf = carry[1]
+        rng, dk = jax.random.split(rng)
+        bo, ba, br, bn, bd, b_best, b_idx = buf_sample(buf, dk)
+        rng, dk2 = jax.random.split(rng)
+        best, improved, q_actor, best_q = spg_find_best(actor_params, q_params, bo, ba, b_best, dk2)
+        rng, dk3 = jax.random.split(rng)
+        diag = spg_diagnostics(actor_params, q_params, bo, best, improved, q_actor, best_q, dk3)
+        print(f"SPG diagnostics: cos_sim={float(diag['cos_sim']):.3f} "
+              f"q_gain={float(diag['spg_q_gain']):.3f} "
+              f"reparam_gain={float(diag['reparam_q_gain']):.3f} "
+              f"frac_improved={float(diag['spg_frac']):.2f}", flush=True)
+
+    # ── Eval ─────────────────────────────────────────────────────────────
     @jax.jit
-    def eval_step(state, actor_params, key):
-        action, _, _, _ = actor.apply(actor_params, state.obs, key)
-        return env.step(state, action)
+    def eval_episode(key):
+        def step(carry, _):
+            s, k, ret = carry
+            k, ak = jax.random.split(k)
+            a, _, _, _ = actor.apply(actor_params, s.obs, ak)
+            s = env.step(s, a)
+            return (s, k, ret + s.reward), None
+        s = env.reset(key)
+        (_, _, ret), _ = jax.lax.scan(step, (s, key, 0.0), None, length=1000)
+        return ret
 
     print("Evaluating...", flush=True)
-    eval_returns = []
-    for ep in range(EVAL_EPISODES):
-        rng, eval_key = jax.random.split(rng)
-        state = env.reset(eval_key)
-        ep_return = 0.0
-        for _ in range(1000):
-            state = eval_step(state, actor_params, eval_key)
-            ep_return += float(state.reward)
-            if state.done:
-                break
-        eval_returns.append(ep_return)
+    rng, eval_key = jax.random.split(rng)
+    returns = jax.vmap(eval_episode)(jax.random.split(eval_key, EVAL_EPISODES))
+    mean_ret, std_ret = float(returns.mean()), float(returns.std())
 
-    mean_ret = np.mean(eval_returns)
-    std_ret = np.std(eval_returns)
-    total_time = time.time() - t0
+    total = time.time() - t0
     print(f"Eval ({EVAL_EPISODES} eps): {mean_ret:.1f} +/- {std_ret:.1f}")
     print(f"training_seconds: {elapsed:.1f}")
-    print(f"total_seconds: {total_time:.1f}")
+    print(f"total_seconds: {total:.1f}")
     print(f"{TASK.lower()}_return: {mean_ret:.2f}")
+
+    metrics.dump(f"runs/{TASK.lower()}_jax_metrics.csv")
 
 
 if __name__ == "__main__":
