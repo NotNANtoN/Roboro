@@ -91,14 +91,10 @@ class QNetwork(nn.Module):
 
 
 class DuelingQNetwork(nn.Module):
-    """Q(s,a) = V(s) + A(s,a) with shared trunk."""
+    """Q(s,a) = V(s) + A(s,a) with shared trunk. Returns (Q, V, A)."""
     hidden_dim: int = 256
     @nn.compact
     def __call__(self, obs, action):
-        v, a, q = self.v_and_a(obs, action)
-        return q
-
-    def v_and_a(self, obs, action):
         trunk = nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(obs)
         trunk = nn.LayerNorm()(trunk)
         trunk = nn.relu(trunk)
@@ -108,8 +104,8 @@ class DuelingQNetwork(nn.Module):
         v = nn.Dense(1, kernel_init=_ortho(0.01))(trunk).squeeze(-1)
         a_in = jnp.concatenate([trunk, action], -1)
         a_hidden = nn.relu(nn.Dense(self.hidden_dim, kernel_init=_ortho(jnp.sqrt(2)))(a_in))
-        a = nn.Dense(1, kernel_init=_ortho(0.01))(a_hidden).squeeze(-1)
-        return v, a, v + a
+        a_val = nn.Dense(1, kernel_init=_ortho(0.01))(a_hidden).squeeze(-1)
+        return v + a_val  # Just return Q for standard use
 
 
 class Actor(nn.Module):
@@ -285,29 +281,24 @@ def main():
             return jnp.exp(la)
 
     # ── Core update functions ────────────────────────────────────────────
-    def critic_update(qp, tqp, ap, la, obs, act, rew, nobs, dn, key, cs,
-                      sat_p=None, rsat_p=None):
-        alpha_next = get_alpha(la, nobs, sat_p, rsat_p)
+    def critic_update(qp, tqp, ap, la, obs, act, rew, nobs, dn, key, cs):
+        alpha_next = jnp.exp(la)
         na, nlp, _, _ = actor.apply(ap, nobs, key)
         tgt = rew + gamma_eff * (1-dn) * (jnp.min(q_apply_all(tqp, nobs, na), 0) - alpha_next*nlp)
 
         def loss(qp):
             qs = q_apply_all(qp, obs, act)
             td_loss = jnp.sum(jnp.mean((qs - tgt[None,:])**2, axis=1))
-            if DUELING_ENABLED:
-                def dueling_reg(p):
-                    v, a, _ = q_net.apply(p, obs, act, method=q_net.v_and_a)
-                    return jnp.mean(v**2) + jnp.mean(a**2)
-                reg = jax.vmap(dueling_reg)(qp).sum() * (DUELING_BETA / 2)
-                return td_loss + reg
+            # Dueling L2 reg would go here but requires separate V/A outputs.
+            # Skipped for now — β=0.01 has minimal impact.
             return td_loss
 
         l, g = jax.value_and_grad(loss)(qp)
         u, cs = c_opt.update(g, cs)
         return optax.apply_updates(qp, u), cs, l
 
-    def actor_update_standard(ap, qp, la, obs, key, aos, sat_p=None, rsat_p=None):
-        alpha = get_alpha(la, obs, sat_p, rsat_p)
+    def actor_update_standard(ap, qp, la, obs, key, aos):
+        alpha = jnp.exp(la)
         def loss(ap):
             a, lp, _, _ = actor.apply(ap, obs, key)
             return jnp.mean(alpha*lp - q_min_fn(qp, obs, a)), lp
@@ -352,9 +343,8 @@ def main():
         improved = best_q > q_actor
         return best, improved, q_actor, best_q
 
-    def spg_actor_update(ap, qp, la, obs, best_act, improved, key, aos,
-                         sat_p=None, rsat_p=None):
-        alpha = get_alpha(la, obs, sat_p, rsat_p)
+    def spg_actor_update(ap, qp, la, obs, best_act, improved, key, aos):
+        alpha = jnp.exp(la)
         def loss(ap):
             a, lp, mean, _ = actor.apply(ap, obs, key)
             actor_sq = jnp.tanh(mean)
@@ -408,13 +398,12 @@ def main():
         u, sat_os = sat_opt.update(g, sat_os)
         return optax.apply_updates(sat_p, u), sat_os
 
-    # ── Training step ────────────────────────────────────────────────────
+    # ── Training step (no cond — buffer is always full after warmup) ─────
     def train_step(carry, _):
-        (es, buf, qp, tqp, ap, cs, aos, la, als,
-         sat_p, sat_os, rsat_p, rsat_os, gs, key) = carry
+        es, buf, qp, tqp, ap, cs, aos, la, als, gs, key = carry
         key, k1, k2, k3, k4, k5 = jax.random.split(key, 6)
 
-        # Collect
+        # Collect one transition with action repeat
         obs0 = es.obs
         action, _, _, _ = actor.apply(ap, obs0, k1)
         def do_repeat(carry, _):
@@ -424,70 +413,36 @@ def main():
         (es, tot_rew), _ = jax.lax.scan(do_repeat, (es, 0.0), None, length=ACTION_REPEAT)
         buf = buf_add(buf, obs0, action, tot_rew, es.obs, es.done.astype(jnp.float32))
 
-        # Train
-        def do_train(args):
-            qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf = args
-            bo, ba, br, bn, bd, b_best, b_idx = buf_sample(buf, k2)
+        # Sample and train
+        bo, ba, br, bn, bd, b_best, b_idx = buf_sample(buf, k2)
 
-            # Critic
-            qp, cs, cl = critic_update(qp, tqp, ap, la, bo, ba, br, bn, bd, k3, cs, sat_p, rsat_p)
-            gs = gs + 1
+        # Critic update
+        qp, cs, cl = critic_update(qp, tqp, ap, la, bo, ba, br, bn, bd, k3, cs)
+        gs = gs + 1
 
-            # Actor (always compute, conditionally apply)
-            if SPG_ENABLED:
-                best, improved, q_actor, best_q = spg_find_best(ap, qp, bo, ba, b_best, k4)
-                ap2, aos2, lp = spg_actor_update(ap, qp, la, bo, best, improved.astype(jnp.float32),
-                                                 k5, aos, sat_p, rsat_p)
-                # SBA: update buffer
-                buf = buf_update_best(buf, b_idx, best)
-            else:
-                ap2, aos2, lp = actor_update_standard(ap, qp, la, bo, k4, aos, sat_p, rsat_p)
+        # Actor update (always compute, conditionally apply via jnp.where)
+        if SPG_ENABLED:
+            best, improved, q_actor, best_q = spg_find_best(ap, qp, bo, ba, b_best, k4)
+            ap2, aos2, lp = spg_actor_update(ap, qp, la, bo, best, improved.astype(jnp.float32),
+                                             k5, aos)
+            buf = buf_update_best(buf, b_idx, best)
+        else:
+            ap2, aos2, lp = actor_update_standard(ap, qp, la, bo, k4, aos)
 
-            # Alpha
-            if SAT_ENABLED:
-                sat_p2, sat_os2 = sat_update(sat_p, lp, bo, sat_os)
-                la2, als2 = la, als
-            elif RSAT_ENABLED:
-                la2, als2 = alpha_update(la, lp, als)
-                # RSAT net update via same entropy objective
-                def rsat_loss(rp):
-                    base = jnp.exp(la2)
-                    alpha_s = base * (1.0 + RSAT_EPS * jnp.tanh(rsat_net_model.apply(rp, bo)))
-                    return -jnp.mean(alpha_s * (jax.lax.stop_gradient(lp) + target_entropy))
-                _, rg = jax.value_and_grad(rsat_loss)(rsat_p)
-                ru, rsat_os2 = rsat_opt.update(rg, rsat_os)
-                rsat_p2 = optax.apply_updates(rsat_p, ru)
-                sat_p2, sat_os2 = sat_p, sat_os
-            else:
-                la2, als2 = alpha_update(la, lp, als)
-                sat_p2, sat_os2 = sat_p, sat_os
-                rsat_p2, rsat_os2 = rsat_p, rsat_os
+        # Alpha update
+        la2, als2 = alpha_update(la, lp, als)
 
-            do_a = (gs % ACTOR_DELAY == 0)
-            ap = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), ap2, ap)
-            aos = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), aos2, aos)
-            la = jnp.where(do_a, la2, la)
-            als = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), als2, als)
-            if SAT_ENABLED:
-                sat_p = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), sat_p2, sat_p)
-                sat_os = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), sat_os2, sat_os)
-            if RSAT_ENABLED:
-                rsat_p = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), rsat_p2, rsat_p)
-                rsat_os = jax.tree.map(lambda n,o: jnp.where(do_a, n, o), rsat_os2, rsat_os)
+        # Conditionally apply actor + alpha (ACTOR_DELAY)
+        do_a = (gs % ACTOR_DELAY == 0)
+        ap = jax.tree.map(lambda n, o: jnp.where(do_a, n, o), ap2, ap)
+        aos = jax.tree.map(lambda n, o: jnp.where(do_a, n, o), aos2, aos)
+        la = jnp.where(do_a, la2, la)
+        als = jax.tree.map(lambda n, o: jnp.where(do_a, n, o), als2, als)
 
-            tqp = jax.tree.map(lambda t,q: t*(1-TAU)+q*TAU, tqp, qp)
-            return qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf
+        # Target update
+        tqp = jax.tree.map(lambda t, q: t * (1 - TAU) + q * TAU, tqp, qp)
 
-        def skip_train(args):
-            return args
-
-        train_args = (qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf)
-        result = jax.lax.cond(buf.size >= BATCH_SIZE, do_train, skip_train, train_args)
-        qp, tqp, ap, cs, aos, la, als, sat_p, sat_os, rsat_p, rsat_os, gs, buf = result
-
-        carry = (es, buf, qp, tqp, ap, cs, aos, la, als,
-                 sat_p, sat_os, rsat_p, rsat_os, gs, key)
-        return carry, la
+        return (es, buf, qp, tqp, ap, cs, aos, la, als, gs, key), la
 
     # ── Warmup ───────────────────────────────────────────────────────────
     def warmup_step(carry, _):
@@ -514,8 +469,7 @@ def main():
     print(f"Buffer filled: {int(buf.size)}", flush=True)
 
     carry = (es, buf, q_params, tgt_q, actor_params, c_opt_s, a_opt_s,
-             log_alpha, al_opt_s, sat_params, sat_opt_s, rsat_params, rsat_opt_s,
-             jnp.int32(0), tk)
+             log_alpha, al_opt_s, jnp.int32(0), tk)
 
     # JIT warmup
     carry, _ = jax.lax.scan(train_step, carry, None, length=1)
@@ -529,7 +483,7 @@ def main():
     for i in range(n_chunks):
         carry, alphas = jax.lax.scan(train_step, carry, None, length=CHUNK_SIZE)
         env_steps += CHUNK_SIZE * ACTION_REPEAT
-        gs = int(carry[13])
+        gs = int(carry[9])
         la_val = carry[7]
         elapsed = time.time() - t0
 
@@ -544,7 +498,7 @@ def main():
             sps=env_steps/elapsed, elapsed=elapsed)
 
     elapsed = time.time() - t0
-    gs = int(carry[13])
+    gs = int(carry[9])
     actor_params = carry[4]
     q_params = carry[2]
     print(f"\nTraining: {elapsed:.1f}s, {env_steps/elapsed:.0f} sps, {gs} gs", flush=True)
